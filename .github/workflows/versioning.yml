@@ -31,7 +31,7 @@ jobs:
           repository: 922-Studio/workflows
           ref: main
           path: workflow-scripts # Checkout scripts to a separate subfolder
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PAT_GITHUB }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
