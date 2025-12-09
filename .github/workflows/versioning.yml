@@ -4,11 +4,6 @@ name: AI-Powered Versioning
 on:
   workflow_call:
     inputs:
-      runs-on:
-        description: 'The type of runner to use for the job'
-        required: false
-        type: string
-        default: 'ubuntu-latest'
     secrets:
       gemini_api_key:
         description: 'The API key for the Gemini API'
@@ -20,7 +15,7 @@ on:
 
 jobs:
   version:
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: [self-hosted, lab]
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
     steps:
