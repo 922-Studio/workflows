@@ -15,7 +15,7 @@ on:
 
 jobs:
   version:
-    runs-on: [self-hosted, lab]
+    runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
     steps:
