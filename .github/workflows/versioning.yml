@@ -1,0 +1,90 @@
+
+name: AI-Powered Versioning
+
+on:
+  workflow_call:
+    inputs:
+      gemini_api_key:
+        description: 'The API key for the Gemini API'
+        required: true
+        type: string
+    outputs:
+      new_version:
+        description: "The new version number"
+        value: ${{ jobs.version.outputs.new_version }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.version.outputs.new_version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history for version calculation
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install google-generativeai
+
+      - name: Get latest tag
+        id: latest_tag
+        run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo 'none')" >> $GITHUB_OUTPUT
+
+      - name: Get commit messages
+        id: commit_messages
+        run: |
+          if [ "${{ steps.latest_tag.outputs.tag }}" == "none" ]; then
+            COMMITS=$(git log --pretty=format:"%s%n%b" | head -c 10000)
+          else
+            COMMITS=$(git log ${{ steps.latest_tag.outputs.tag }}..HEAD --pretty=format:"%s%n%b" | head -c 10000)
+          fi
+          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Check for [ci skip]
+        id: ci_skip_check
+        run: |
+          if git log -1 --pretty=%B | grep -q "\[ci skip\]"; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Determine next version
+        if: steps.ci_skip_check.outputs.skip == 'false'
+        id: version
+        env:
+          GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+        run: |
+          NEXT_VERSION=$(python .github/scripts/determine_version.py --commits "${{ steps.commit_messages.outputs.commits }}")
+          echo "new_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Update version file
+        if: steps.ci_skip_check.outputs.skip == 'false'
+        run: echo "${{ steps.version.outputs.new_version }}" > version.txt
+
+      - name: Configure Git
+        if: steps.ci_skip_check.outputs.skip == 'false'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push version file
+        if: steps.ci_skip_check.outputs.skip == 'false'
+        run: |
+          git add version.txt
+          git commit -m "chore: Update version to ${{ steps.version.outputs.new_version }} [ci skip]"
+          git push
+
+      - name: Create and push tag
+        if: steps.ci_skip_check.outputs.skip == 'false'
+        run: |
+          git tag "v${{ steps.version.outputs.new_version }}"
+          git push origin "v${{ steps.version.outputs.new_version }}"
