@@ -30,7 +30,7 @@ def get_version_bump_from_gemini(api_key, commits):
     """Determines the version bump using the Gemini API."""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         prompt = f"""
         You are an expert in Semantic Versioning and Conventional Commits.
