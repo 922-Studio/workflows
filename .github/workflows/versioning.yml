@@ -1,16 +1,12 @@
-
 name: AI-Powered Versioning
 
 on:
   workflow_call:
-    inputs:
     secrets:
       gemini_api_key:
-        description: 'The API key for the Gemini API'
         required: true
     outputs:
       new_version:
-        description: "The new version number"
         value: ${{ jobs.version.outputs.new_version }}
 
 jobs:
@@ -19,10 +15,23 @@ jobs:
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
     steps:
-      - name: Checkout code
+      # 1. Checkout the Application Code (HomeAPI)
+      # We need this to get the git history/tags of the app being deployed
+      - name: Checkout Application Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Fetch all history for version calculation
+          fetch-depth: 0 
+          path: app-code  # Checkout app to a subfolder to keep things clean
+
+      # 2. Checkout the Workflows/Scripts Repo
+      # This pulls the python script from 922-Studio/workflows
+      - name: Checkout Workflow Scripts
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: workflow-scripts # Checkout scripts to a separate subfolder
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,12 +41,15 @@ jobs:
       - name: Install dependencies
         run: pip install google-generativeai
 
+      # Note: We must run git commands inside the 'app-code' directory
       - name: Get latest tag
         id: latest_tag
+        working-directory: ./app-code
         run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo 'none')" >> $GITHUB_OUTPUT
 
       - name: Get commit messages
         id: commit_messages
+        working-directory: ./app-code
         run: |
           if [ "${{ steps.latest_tag.outputs.tag }}" == "none" ]; then
             COMMITS=$(git log --pretty=format:"%s%n%b" | head -c 10000)
@@ -50,6 +62,7 @@ jobs:
 
       - name: Check for [ci skip]
         id: ci_skip_check
+        working-directory: ./app-code
         run: |
           if git log -1 --pretty=%B | grep -q "\[ci skip\]"; then
             echo "skip=true" >> $GITHUB_OUTPUT
@@ -61,23 +74,27 @@ jobs:
         if: steps.ci_skip_check.outputs.skip == 'false'
         id: version
         env:
-          GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+          GEMINI_API_KEY: ${{ secrets.gemini_api_key }}
+        # Run the script from the 'workflow-scripts' folder
         run: |
-          NEXT_VERSION=$(python .github/scripts/determine_version.py --commits "${{ steps.commit_messages.outputs.commits }}")
+          NEXT_VERSION=$(python workflow-scripts/.github/scripts/determine_version.py --commits "${{ steps.commit_messages.outputs.commits }}")
           echo "new_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
 
       - name: Update version file
         if: steps.ci_skip_check.outputs.skip == 'false'
+        working-directory: ./app-code
         run: echo "${{ steps.version.outputs.new_version }}" > version.txt
 
       - name: Configure Git
         if: steps.ci_skip_check.outputs.skip == 'false'
+        working-directory: ./app-code
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Commit and push version file
         if: steps.ci_skip_check.outputs.skip == 'false'
+        working-directory: ./app-code
         run: |
           git add version.txt
           git commit -m "chore: Update version to ${{ steps.version.outputs.new_version }} [ci skip]"
@@ -85,6 +102,7 @@ jobs:
 
       - name: Create and push tag
         if: steps.ci_skip_check.outputs.skip == 'false'
+        working-directory: ./app-code
         run: |
           git tag "v${{ steps.version.outputs.new_version }}"
           git push origin "v${{ steps.version.outputs.new_version }}"
