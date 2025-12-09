@@ -8,6 +8,11 @@ on:
         description: 'The API key for the Gemini API'
         required: true
         type: string
+      runs-on:
+        description: 'The type of runner to use for the job'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
     outputs:
       new_version:
         description: "The new version number"
@@ -15,7 +20,7 @@ on:
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs-on }}
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
     steps:

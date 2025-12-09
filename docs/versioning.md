@@ -12,6 +12,12 @@ This document provides a detailed explanation of the AI-Powered Versioning workf
 *   **How to create:** You can generate a new API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 *   **How to store:** For security, this key should be stored as a secret in the repository that *uses* this workflow. Navigate to `Settings > Secrets and variables > Actions` and add a new repository secret named `GEMINI_API_KEY`.
 
+### `runs-on` (optional)
+
+*   **Description:** The type of runner to use for the job. You can use this to specify a self-hosted runner.
+*   **Type:** `string`
+*   **Default:** `ubuntu-latest`
+
 </details>
 
 <details>

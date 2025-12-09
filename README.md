@@ -19,6 +19,8 @@ jobs:
     uses: <your-username>/<this-repo-name>/.github/workflows/versioning.yml@main
     with:
       gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+      # Optional: Specify a self-hosted runner
+      # runs-on: self-hosted
 ```
 
 ### Prerequisites
