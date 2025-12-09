@@ -5,6 +5,9 @@ on:
     secrets:
       gemini_api_key:
         required: true
+      PAT_GITHUB:
+        required: true
+        description: "Personal Access Token to clone private repos"
     outputs:
       new_version:
         value: ${{ jobs.version.outputs.new_version }}
