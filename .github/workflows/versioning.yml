@@ -25,17 +25,15 @@ jobs:
       - name: Checkout Application Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
-          path: app-code  # Checkout app to a subfolder to keep things clean
+          fetch-depth: 0
+          path: app-code
 
-      # 2. Checkout the Workflows/Scripts Repo
-      # This pulls the python script from 922-Studio/workflows
       - name: Checkout Workflow Scripts
         uses: actions/checkout@v4
         with:
           repository: 922-Studio/workflows
           ref: main
-          path: workflow-scripts # Checkout scripts to a separate subfolder
+          path: workflow-scripts
           token: ${{ secrets.PAT_GITHUB }}
 
       - name: Set up Python
@@ -44,18 +42,25 @@ jobs:
           python-version: '3.x'
 
       - name: Install dependencies
-        run: pip install google-generativeai
+        run: |
+          echo "📦 Installing dependencies..."
+          pip install google-generativeai
+          echo "✅ Dependencies installed."
 
-      # Note: We must run git commands inside the 'app-code' directory
       - name: Get latest tag
         id: latest_tag
         working-directory: ./app-code
-        run: echo "tag=$(git describe --tags --abbrev=0 2>/dev/null || echo 'none')" >> $GITHUB_OUTPUT
+        run: |
+          echo "🏷️ Getting latest tag..."
+          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo 'none')
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $TAG"
 
       - name: Get commit messages
         id: commit_messages
         working-directory: ./app-code
         run: |
+          echo "📝 Getting commit messages..."
           if [ "${{ steps.latest_tag.outputs.tag }}" == "none" ]; then
             COMMITS=$(git log --pretty=format:"%s%n%b" | head -c 10000)
           else
@@ -64,50 +69,78 @@ jobs:
           echo "commits<<EOF" >> $GITHUB_OUTPUT
           echo "$COMMITS" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          echo "✅ Commit messages gathered."
+
+      - name: Check for new commits
+        id: commit_check
+        working-directory: ./app-code
+        run: |
+          echo "🔎 Checking for new commits..."
+          if [ -z "${{ steps.commit_messages.outputs.commits }}" ]; then
+            echo "No new commits found. Skipping version bump."
+            echo "has_new_commits=false" >> $GITHUB_OUTPUT
+          else
+            echo "New commits found. Proceeding with version bump."
+            echo "has_new_commits=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Check for [ci skip]
         id: ci_skip_check
+        if: steps.commit_check.outputs.has_new_commits == 'true'
         working-directory: ./app-code
         run: |
+          echo "🔎 Checking for [ci skip]..."
           if git log -1 --pretty=%B | grep -q "\[ci skip\]"; then
-            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "ci_skip=true" >> $GITHUB_OUTPUT
+            echo "Found [ci skip] in last commit message. Skipping version bump."
           else
-            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "ci_skip=false" >> $GITHUB_OUTPUT
+            echo "No [ci skip] found. Proceeding..."
           fi
 
       - name: Determine next version
-        if: steps.ci_skip_check.outputs.skip == 'false'
+        if: steps.ci_skip_check.outputs.ci_skip == 'false' && steps.commit_check.outputs.has_new_commits == 'true'
         id: version
         env:
           GEMINI_API_KEY: ${{ secrets.gemini_api_key }}
-        # Run the script from the 'workflow-scripts' folder
         run: |
+          echo "🧠 Determining next version with AI..."
           NEXT_VERSION=$(python workflow-scripts/.github/scripts/determine_version.py --commits "${{ steps.commit_messages.outputs.commits }}")
           echo "new_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
+          echo "AI determined next version: $NEXT_VERSION"
 
       - name: Update version file
-        if: steps.ci_skip_check.outputs.skip == 'false'
+        if: steps.version.outputs.new_version != ''
         working-directory: ./app-code
-        run: echo "${{ steps.version.outputs.new_version }}" > version.txt
+        run: |
+          echo "📝 Updating version file to ${{ steps.version.outputs.new_version }}..."
+          echo "${{ steps.version.outputs.new_version }}" > version.txt
+          echo "✅ Version file updated."
 
       - name: Configure Git
-        if: steps.ci_skip_check.outputs.skip == 'false'
+        if: steps.version.outputs.new_version != ''
         working-directory: ./app-code
         run: |
+          echo "🔧 Configuring Git..."
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          echo "✅ Git configured."
 
       - name: Commit and push version file
-        if: steps.ci_skip_check.outputs.skip == 'false'
+        if: steps.version.outputs.new_version != ''
         working-directory: ./app-code
         run: |
+          echo " committing and pushing version file..."
           git add version.txt
           git commit -m "chore: Update version to ${{ steps.version.outputs.new_version }} [ci skip]"
           git push
+          echo "✅ Version file committed and pushed."
 
       - name: Create and push tag
-        if: steps.ci_skip_check.outputs.skip == 'false'
+        if: steps.version.outputs.new_version != ''
         working-directory: ./app-code
         run: |
+          echo "🏷️ Creating and pushing tag v${{ steps.version.outputs.new_version }}..."
           git tag "v${{ steps.version.outputs.new_version }}"
           git push origin "v${{ steps.version.outputs.new_version }}"
+          echo "✅ Tag created and pushed."
