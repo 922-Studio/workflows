@@ -163,7 +163,21 @@ jobs:
 
 3. **Repository Access**: The repository must be cloned to the specified `repository_path`
 
-4. **Permissions**: The runner user must have:
+4. **GitHub Personal Access Token (PAT)**: Required for private repositories
+   - Create a PAT at [GitHub Settings > Developer settings > Personal access tokens](https://github.com/settings/tokens)
+   - Required scopes: `repo` (full control of private repositories)
+   - Add as repository secret named `PAT_GITHUB`
+
+5. **Git Configuration**: On the server, ensure the repository is cloned with HTTPS:
+   ```bash
+   # Check current remote
+   git remote -v
+   
+   # If using SSH (git@github.com), switch to HTTPS
+   git remote set-url origin https://github.com/username/repo.git
+   ```
+
+6. **Permissions**: The runner user must have:
    - Read/write access to the repository directory
    - Permission to run Docker commands
    - Git configured for the repository
@@ -185,6 +199,34 @@ The workflow uses emojis for quick visual scanning:
 - 📋 Log displays
 
 ## Troubleshooting
+
+### Git Authentication Fails
+
+If you see `fatal: could not read Username for 'https://github.com': No such device or address`:
+
+1. **Verify PAT_GITHUB secret is set**:
+   - Go to repository Settings > Secrets and variables > Actions
+   - Ensure `PAT_GITHUB` secret exists
+
+2. **Check git remote URL on server**:
+   ```bash
+   cd /home/lab/your-repo
+   git remote -v
+   ```
+   
+   Should show HTTPS URL:
+   ```
+   origin  https://github.com/username/repo.git (fetch)
+   origin  https://github.com/username/repo.git (push)
+   ```
+   
+   If it shows SSH (`git@github.com`), change to HTTPS:
+   ```bash
+   git remote set-url origin https://github.com/username/repo.git
+   ```
+
+3. **Verify PAT has correct permissions**:
+   - Token needs `repo` scope for private repositories
 
 ### Deployment Fails
 Check the workflow logs - all failures include full container logs and system information.
