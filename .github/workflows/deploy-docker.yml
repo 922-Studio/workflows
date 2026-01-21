@@ -175,19 +175,19 @@ jobs:
           
           if [ -n "${{ inputs.service_name }}" ]; then
             echo "Building service: ${{ inputs.service_name }}"
-            docker-compose -f ${{ inputs.docker_compose_file }} build ${{ inputs.service_name }}
+            docker compose -f ${{ inputs.docker_compose_file }} build ${{ inputs.service_name }}
             echo "✅ Build completed"
             
             echo "Starting service: ${{ inputs.service_name }}"
-            docker-compose -f ${{ inputs.docker_compose_file }} up -d ${{ inputs.service_name }}
+            docker compose -f ${{ inputs.docker_compose_file }} up -d ${{ inputs.service_name }}
             echo "✅ Service started"
           else
             echo "Building all services..."
-            docker-compose -f ${{ inputs.docker_compose_file }} build
+            docker compose -f ${{ inputs.docker_compose_file }} build
             echo "✅ Build completed"
             
             echo "Starting all services..."
-            docker-compose -f ${{ inputs.docker_compose_file }} up -d
+            docker compose -f ${{ inputs.docker_compose_file }} up -d
             echo "✅ All services started"
           fi
 
