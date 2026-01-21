@@ -10,7 +10,7 @@ on:
       docker_compose_file:
         required: true
         type: string
-        description: "Path to docker-compose file relative to repository root"
+        description: "Path to docker compose file relative to repository root"
       service_name:
         required: false
         type: string
@@ -18,7 +18,7 @@ on:
       working_directory:
         required: false
         type: string
-        description: "Working directory for docker-compose commands (defaults to repository_path)"
+        description: "Working directory for docker compose commands (defaults to repository_path)"
     secrets:
       PAT_GITHUB:
         required: false
@@ -117,10 +117,10 @@ jobs:
           fi
           echo "✅ Working directory verified"
 
-      - name: Verify docker-compose file
+      - name: Verify docker compose file
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          echo "🔍 Verifying docker-compose file..."
+          echo "🔍 Verifying docker compose file..."
           COMPOSE_FILE="${{ inputs.docker_compose_file }}"
           
           if [ ! -f "$COMPOSE_FILE" ]; then
@@ -137,9 +137,9 @@ jobs:
         run: |
           echo "📊 Current container status:"
           if [ -n "${{ inputs.service_name }}" ]; then
-            docker-compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }} || echo "⚠️  Service not running"
+            docker compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }} || echo "⚠️  Service not running"
           else
-            docker-compose -f ${{ inputs.docker_compose_file }} ps || echo "⚠️  No containers running"
+            docker compose -f ${{ inputs.docker_compose_file }} ps || echo "⚠️  No containers running"
           fi
         continue-on-error: true
 
@@ -150,11 +150,11 @@ jobs:
           
           if [ -n "${{ inputs.service_name }}" ]; then
             echo "Stopping service: ${{ inputs.service_name }}"
-            docker-compose -f ${{ inputs.docker_compose_file }} stop ${{ inputs.service_name }}
+            docker compose -f ${{ inputs.docker_compose_file }} stop ${{ inputs.service_name }}
             echo "✅ Service stopped"
           else
             echo "Stopping all services..."
-            docker-compose -f ${{ inputs.docker_compose_file }} down
+            docker compose -f ${{ inputs.docker_compose_file }} down
             echo "✅ All services stopped"
           fi
         continue-on-error: true
@@ -204,10 +204,10 @@ jobs:
           
           if [ -n "${{ inputs.service_name }}" ]; then
             echo "Checking service: ${{ inputs.service_name }}"
-            docker-compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }}
+            docker compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }}
             
             # Check if container is running
-            STATUS=$(docker-compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} | xargs docker inspect -f '{{.State.Status}}')
+            STATUS=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} | xargs docker inspect -f '{{.State.Status}}')
             echo "Container status: $STATUS"
             
             if [ "$STATUS" != "running" ]; then
@@ -216,7 +216,7 @@ jobs:
             fi
           else
             echo "Checking all services:"
-            docker-compose -f ${{ inputs.docker_compose_file }} ps
+            docker compose -f ${{ inputs.docker_compose_file }} ps
           fi
           
           echo "✅ Deployment verification successful"
@@ -226,9 +226,9 @@ jobs:
         run: |
           echo "📋 Recent container logs:"
           if [ -n "${{ inputs.service_name }}" ]; then
-            docker-compose -f ${{ inputs.docker_compose_file }} logs --tail=30 ${{ inputs.service_name }}
+            docker compose -f ${{ inputs.docker_compose_file }} logs --tail=30 ${{ inputs.service_name }}
           else
-            docker-compose -f ${{ inputs.docker_compose_file }} logs --tail=30
+            docker compose -f ${{ inputs.docker_compose_file }} logs --tail=30
           fi
 
       - name: Show logs on failure
@@ -243,14 +243,14 @@ jobs:
           echo "📋 Full container logs:"
           
           if [ -n "${{ inputs.service_name }}" ]; then
-            docker-compose -f ${{ inputs.docker_compose_file }} logs --tail=100 ${{ inputs.service_name }}
+            docker compose -f ${{ inputs.docker_compose_file }} logs --tail=100 ${{ inputs.service_name }}
           else
-            docker-compose -f ${{ inputs.docker_compose_file }} logs --tail=100
+            docker compose -f ${{ inputs.docker_compose_file }} logs --tail=100
           fi
           
           echo ""
           echo "📊 Container status:"
-          docker-compose -f ${{ inputs.docker_compose_file }} ps
+          docker compose -f ${{ inputs.docker_compose_file }} ps
           
           echo ""
           echo "🔍 Docker system info:"
