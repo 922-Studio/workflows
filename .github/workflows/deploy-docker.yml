@@ -143,21 +143,21 @@ jobs:
           fi
         continue-on-error: true
 
-      - name: Stop existing containers
+      - name: Deploy with zero-downtime rolling update
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          echo "🛑 Stopping containers..."
+          echo "🚀 Deploying with rolling update (zero downtime)..."
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           
           if [ -n "${{ inputs.service_name }}" ]; then
-            echo "Stopping service: ${{ inputs.service_name }}"
-            docker compose -f ${{ inputs.docker_compose_file }} stop ${{ inputs.service_name }}
-            echo "✅ Service stopped"
+            echo "Deploying service: ${{ inputs.service_name }}"
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --build --no-deps ${{ inputs.service_name }}
+            echo "✅ Service deployed"
           else
-            echo "Stopping all services..."
-            docker compose -f ${{ inputs.docker_compose_file }} down
-            echo "✅ All services stopped"
+            echo "Deploying all services..."
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --build
+            echo "✅ All services deployed"
           fi
-        continue-on-error: true
 
       - name: Clean up old images (optional)
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
@@ -166,30 +166,6 @@ jobs:
           docker image prune -f || true
           echo "✅ Cleanup completed"
         continue-on-error: true
-
-      - name: Build and start containers
-        working-directory: ${{ steps.set_workdir.outputs.workdir }}
-        run: |
-          echo "🏗️  Building and starting containers..."
-          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
-          
-          if [ -n "${{ inputs.service_name }}" ]; then
-            echo "Building service: ${{ inputs.service_name }}"
-            docker compose -f ${{ inputs.docker_compose_file }} build ${{ inputs.service_name }}
-            echo "✅ Build completed"
-            
-            echo "Starting service: ${{ inputs.service_name }}"
-            docker compose -f ${{ inputs.docker_compose_file }} up -d ${{ inputs.service_name }}
-            echo "✅ Service started"
-          else
-            echo "Building all services..."
-            docker compose -f ${{ inputs.docker_compose_file }} build
-            echo "✅ Build completed"
-            
-            echo "Starting all services..."
-            docker compose -f ${{ inputs.docker_compose_file }} up -d
-            echo "✅ All services started"
-          fi
 
       - name: Wait for containers to initialize
         run: |
