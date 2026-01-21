@@ -1,0 +1,224 @@
+name: Deploy Docker Service
+
+on:
+  workflow_call:
+    inputs:
+      repository_path:
+        required: true
+        type: string
+        description: "Absolute path to the repository on the self-hosted runner"
+      docker_compose_file:
+        required: true
+        type: string
+        description: "Path to docker-compose file relative to repository root"
+      service_name:
+        required: false
+        type: string
+        description: "Specific service name to restart (optional, if not provided restarts all services)"
+      working_directory:
+        required: false
+        type: string
+        description: "Working directory for docker-compose commands (defaults to repository_path)"
+    secrets:
+      PAT_GITHUB:
+        required: false
+        description: "Personal Access Token for private repos (optional)"
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Log deployment start
+        run: |
+          echo "=========================================="
+          echo "Starting Docker Deployment"
+          echo "=========================================="
+          echo "Repository Path: ${{ inputs.repository_path }}"
+          echo "Docker Compose File: ${{ inputs.docker_compose_file }}"
+          echo "Service Name: ${{ inputs.service_name || 'ALL SERVICES' }}"
+          echo "Working Directory: ${{ inputs.working_directory || 'repository root' }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      - name: Pull latest changes
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          echo "📥 Pulling latest changes from remote..."
+          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "Current commit: $(git rev-parse HEAD)"
+          
+          git fetch origin
+          echo "✅ Fetch completed"
+          
+          git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
+          echo "✅ Reset to latest commit"
+          
+          echo "New commit: $(git rev-parse HEAD)"
+          echo "Last commit message: $(git log -1 --pretty=%B)"
+
+      - name: Set working directory
+        id: set_workdir
+        run: |
+          if [ -n "${{ inputs.working_directory }}" ]; then
+            WORKDIR="${{ inputs.repository_path }}/${{ inputs.working_directory }}"
+          else
+            WORKDIR="${{ inputs.repository_path }}"
+          fi
+          
+          echo "🔧 Setting working directory: $WORKDIR"
+          echo "workdir=$WORKDIR" >> $GITHUB_OUTPUT
+          
+          if [ ! -d "$WORKDIR" ]; then
+            echo "❌ ERROR: Working directory does not exist!"
+            exit 1
+          fi
+          echo "✅ Working directory verified"
+
+      - name: Verify docker-compose file
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🔍 Verifying docker-compose file..."
+          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
+          
+          if [ ! -f "$COMPOSE_FILE" ]; then
+            echo "❌ ERROR: Docker compose file not found: $COMPOSE_FILE"
+            exit 1
+          fi
+          
+          echo "✅ Docker compose file exists: $COMPOSE_FILE"
+          echo "📄 File contents preview:"
+          head -n 20 "$COMPOSE_FILE"
+
+      - name: Show current container status
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "📊 Current container status:"
+          if [ -n "${{ inputs.service_name }}" ]; then
+            docker-compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }} || echo "⚠️  Service not running"
+          else
+            docker-compose -f ${{ inputs.docker_compose_file }} ps || echo "⚠️  No containers running"
+          fi
+        continue-on-error: true
+
+      - name: Stop existing containers
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🛑 Stopping containers..."
+          
+          if [ -n "${{ inputs.service_name }}" ]; then
+            echo "Stopping service: ${{ inputs.service_name }}"
+            docker-compose -f ${{ inputs.docker_compose_file }} stop ${{ inputs.service_name }}
+            echo "✅ Service stopped"
+          else
+            echo "Stopping all services..."
+            docker-compose -f ${{ inputs.docker_compose_file }} down
+            echo "✅ All services stopped"
+          fi
+        continue-on-error: true
+
+      - name: Clean up old images (optional)
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🧹 Removing dangling images..."
+          docker image prune -f || true
+          echo "✅ Cleanup completed"
+        continue-on-error: true
+
+      - name: Build and start containers
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🏗️  Building and starting containers..."
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          
+          if [ -n "${{ inputs.service_name }}" ]; then
+            echo "Building service: ${{ inputs.service_name }}"
+            docker-compose -f ${{ inputs.docker_compose_file }} build ${{ inputs.service_name }}
+            echo "✅ Build completed"
+            
+            echo "Starting service: ${{ inputs.service_name }}"
+            docker-compose -f ${{ inputs.docker_compose_file }} up -d ${{ inputs.service_name }}
+            echo "✅ Service started"
+          else
+            echo "Building all services..."
+            docker-compose -f ${{ inputs.docker_compose_file }} build
+            echo "✅ Build completed"
+            
+            echo "Starting all services..."
+            docker-compose -f ${{ inputs.docker_compose_file }} up -d
+            echo "✅ All services started"
+          fi
+
+      - name: Wait for containers to initialize
+        run: |
+          echo "⏳ Waiting 5 seconds for containers to initialize..."
+          sleep 5
+          echo "✅ Wait completed"
+
+      - name: Verify deployment
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "✅ Verifying deployment status..."
+          
+          if [ -n "${{ inputs.service_name }}" ]; then
+            echo "Checking service: ${{ inputs.service_name }}"
+            docker-compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }}
+            
+            # Check if container is running
+            STATUS=$(docker-compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} | xargs docker inspect -f '{{.State.Status}}')
+            echo "Container status: $STATUS"
+            
+            if [ "$STATUS" != "running" ]; then
+              echo "❌ ERROR: Container is not running!"
+              exit 1
+            fi
+          else
+            echo "Checking all services:"
+            docker-compose -f ${{ inputs.docker_compose_file }} ps
+          fi
+          
+          echo "✅ Deployment verification successful"
+
+      - name: Show container logs
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "📋 Recent container logs:"
+          if [ -n "${{ inputs.service_name }}" ]; then
+            docker-compose -f ${{ inputs.docker_compose_file }} logs --tail=30 ${{ inputs.service_name }}
+          else
+            docker-compose -f ${{ inputs.docker_compose_file }} logs --tail=30
+          fi
+
+      - name: Show logs on failure
+        if: failure()
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "=========================================="
+          echo "❌ DEPLOYMENT FAILED"
+          echo "=========================================="
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo ""
+          echo "📋 Full container logs:"
+          
+          if [ -n "${{ inputs.service_name }}" ]; then
+            docker-compose -f ${{ inputs.docker_compose_file }} logs --tail=100 ${{ inputs.service_name }}
+          else
+            docker-compose -f ${{ inputs.docker_compose_file }} logs --tail=100
+          fi
+          
+          echo ""
+          echo "📊 Container status:"
+          docker-compose -f ${{ inputs.docker_compose_file }} ps
+          
+          echo ""
+          echo "🔍 Docker system info:"
+          docker system df
+
+      - name: Log deployment success
+        if: success()
+        run: |
+          echo "=========================================="
+          echo "✅ DEPLOYMENT SUCCESSFUL"
+          echo "=========================================="
+          echo "Service: ${{ inputs.service_name || 'ALL SERVICES' }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="

@@ -1,6 +1,18 @@
-# AI-Powered Versioning Workflow
+# Reusable GitHub Actions Workflows
 
-This repository contains a reusable GitHub Actions workflow to automate semantic versioning using Google's Gemini API. It analyzes commit messages to determine the next version number, updates a `version.txt` file, and creates a new version tag.
+This repository contains reusable GitHub Actions workflows for automating common development and deployment tasks.
+
+## Available Workflows
+
+### 1. AI-Powered Versioning
+Automates semantic versioning using Google's Gemini API. It analyzes commit messages to determine the next version number, updates a `version.txt` file, and creates a new version tag.
+
+**Documentation**: [docs/versioning.md](docs/versioning.md)
+
+### 2. Docker Service Deployment
+Automates deployment of Docker services to a self-hosted runner with comprehensive logging and error handling.
+
+**Documentation**: [docs/deploy-docker.md](docs/deploy-docker.md)
 
 ## Usage
 
