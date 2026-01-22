@@ -130,11 +130,15 @@ jobs:
         if: steps.version.outputs.new_version != ''
         working-directory: ./app-code
         run: |
-          echo " committing and pushing version file..."
+          echo "📤 Committing and pushing version file..."
           git add version.txt
-          git commit -m "chore: Update version to ${{ steps.version.outputs.new_version }} [ci skip]"
-          git push
-          echo "✅ Version file committed and pushed."
+          if git diff --cached --quiet; then
+            echo "ℹ️ No changes to version file. Skipping commit."
+          else
+            git commit -m "chore: Update version to ${{ steps.version.outputs.new_version }} [ci skip]"
+            git push
+            echo "✅ Version file committed and pushed."
+          fi
 
       - name: Create and push tag
         if: steps.version.outputs.new_version != ''
