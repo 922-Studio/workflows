@@ -1,0 +1,94 @@
+name: Send Email Notification
+
+on:
+  workflow_call:
+    inputs:
+      recipients:
+        required: true
+        type: string
+        description: "JSON array of recipient email addresses, e.g. [\"user1@example.com\", \"user2@example.com\"]"
+      subject:
+        required: true
+        type: string
+        description: "Email subject line"
+      sender_name:
+        required: false
+        type: string
+        default: "Home-Lab Bot"
+        description: "Display name for the sender"
+      custom_body_html:
+        required: false
+        type: string
+        description: "Custom HTML body for the email (optional, if not provided uses default template)"
+      workflow_status:
+        required: false
+        type: string
+        description: "Status of the workflow (success, failure, etc.) - used in default template"
+      workflow_name:
+        required: false
+        type: string
+        description: "Name of the workflow that triggered the email - used in default template"
+      repository_name:
+        required: false
+        type: string
+        description: "Repository name - used in default template"
+      run_url:
+        required: false
+        type: string
+        description: "URL to the workflow run - used in default template"
+    secrets:
+      GMAIL_APP_PASSWORD:
+        required: true
+        description: "Gmail App Password for SMTP authentication"
+      PAT_GITHUB:
+        required: false
+        description: "Personal Access Token to clone private repos (optional)"
+
+jobs:
+  send-email:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout Workflow Scripts
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: workflow-scripts
+          token: ${{ secrets.PAT_GITHUB }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing email dependencies..."
+          pip install --upgrade pip
+          echo "✅ Dependencies installed."
+
+      - name: Send emails
+        id: send_emails
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SENDER_EMAIL: "gregor160505@gmail.com"
+          SENDER_NAME: ${{ inputs.sender_name }}
+          RECIPIENTS: ${{ inputs.recipients }}
+          SUBJECT: ${{ inputs.subject }}
+          CUSTOM_BODY_HTML: ${{ inputs.custom_body_html }}
+          WORKFLOW_STATUS: ${{ inputs.workflow_status }}
+          WORKFLOW_NAME: ${{ inputs.workflow_name }}
+          REPOSITORY_NAME: ${{ inputs.repository_name }}
+          RUN_URL: ${{ inputs.run_url }}
+        run: |
+          echo "📧 Sending emails..."
+          python workflow-scripts/.github/scripts/send_email.py
+
+      - name: Log results
+        if: always()
+        run: |
+          echo "==========================================="
+          echo "📧 Email Workflow Complete"
+          echo "==========================================="
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "==========================================="

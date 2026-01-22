@@ -14,6 +14,11 @@ Automates deployment of Docker services to a self-hosted runner with comprehensi
 
 **Documentation**: [docs/deploy-docker.md](docs/deploy-docker.md)
 
+### 3. Send Email Notification
+Sends email notifications via Gmail SMTP with support for both default workflow status templates and custom HTML email bodies. Supports multiple recipients and robust error handling.
+
+**Documentation**: [docs/send-email.md](docs/send-email.md)
+
 ## Usage
 
 To use this workflow in your own repository, create a new workflow file (e.g., `.github/workflows/release.yml`) with the following content:
