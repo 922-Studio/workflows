@@ -145,6 +145,10 @@ jobs:
         working-directory: ./app-code
         run: |
           echo "🏷️ Creating and pushing tag v${{ steps.version.outputs.new_version }}..."
-          git tag "v${{ steps.version.outputs.new_version }}"
-          git push origin "v${{ steps.version.outputs.new_version }}"
-          echo "✅ Tag created and pushed."
+          if git rev-parse "v${{ steps.version.outputs.new_version }}" >/dev/null 2>&1; then
+            echo "ℹ️ Tag v${{ steps.version.outputs.new_version }} already exists. Skipping tag creation."
+          else
+            git tag "v${{ steps.version.outputs.new_version }}"
+            git push origin "v${{ steps.version.outputs.new_version }}"
+            echo "✅ Tag created and pushed."
+          fi
