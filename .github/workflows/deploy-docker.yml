@@ -143,6 +143,21 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Stop existing containers
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🛑 Stopping existing containers..."
+          
+          if [ -n "${{ inputs.service_name }}" ]; then
+            echo "Stopping service: ${{ inputs.service_name }}"
+            docker compose -f ${{ inputs.docker_compose_file }} stop ${{ inputs.service_name }} || echo "⚠️  Service not running"
+          else
+            echo "Stopping all services..."
+            docker compose -f ${{ inputs.docker_compose_file }} stop || echo "⚠️  No services running"
+          fi
+          echo "✅ Stop completed"
+        continue-on-error: true
+
       - name: Deploy with zero-downtime rolling update
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
@@ -151,11 +166,11 @@ jobs:
           
           if [ -n "${{ inputs.service_name }}" ]; then
             echo "Deploying service: ${{ inputs.service_name }}"
-            docker compose -f ${{ inputs.docker_compose_file }} up -d --build --no-deps ${{ inputs.service_name }}
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --build --force-recreate --remove-orphans --no-deps ${{ inputs.service_name }}
             echo "✅ Service deployed"
           else
             echo "Deploying all services..."
-            docker compose -f ${{ inputs.docker_compose_file }} up -d --build
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --build --force-recreate --remove-orphans
             echo "✅ All services deployed"
           fi
 
