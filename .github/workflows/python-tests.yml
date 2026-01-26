@@ -62,6 +62,17 @@ jobs:
   tests:
     runs-on: self-hosted
 
+    env:
+      # Minimal environment so config.py-style modules can import safely in CI
+      API_BASE_URL: "http://localhost:8080"
+      GITHUB_OWNER: "922-Studio"
+      GITHUB_REPO: "HomeAPI"
+      GOOGLE_SHEET_ID: "dummy-sheet-id"
+      GOOGLE_SERVICE_ACCOUNT_FILE: "dummy-service-account.json"
+      DATABASE_URL: "postgresql+asyncpg://user:pass@localhost:5432/dbname"
+      DISCORD_BOT_TOKEN: "dummy-discord-token"
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
     steps:
       - name: Log test workflow inputs
         run: |
