@@ -5,7 +5,7 @@ import sys
 import uuid
 from pathlib import Path
 from typing import List
-from urllib import request, error
+from urllib import parse, request, error
 
 
 def log(msg: str) -> None:
@@ -13,7 +13,12 @@ def log(msg: str) -> None:
 
 
 def ensure_project(server_url: str, project_id: str, token: str | None = None) -> None:
-    """Best-effort project creation; non-fatal on error."""
+    """Best-effort project creation; non-fatal on error.
+
+    Some Allure Docker Service setups require manual project creation via
+    `POST /projects`. Others may not support this endpoint (and return 400).
+    We swallow all errors and let the caller continue to `send-results`.
+    """
     create_url = server_url.rstrip("/") + "/projects"
     payload = json.dumps({"id": project_id}).encode("utf-8")
 
@@ -21,13 +26,45 @@ def ensure_project(server_url: str, project_id: str, token: str | None = None) -
     if token:
         headers["X-ALLURE-TOKEN"] = token
 
-    req = request.Request(create_url, data=payload, headers=headers, method="POST")
+    req = request.Request(create_url, data=payload, headers=headers
     try:
         with request.urlopen(req, timeout=10) as resp:
             body = resp.read().decode("utf-8", errors="replace")
             log(f"Allure project create response ({resp.status}): {body}")
     except Exception as exc:  # noqa: BLE001
         log(f"⚠️ Failed to ensure Allure project '{project_id}': {exc}. Continuing anyway.")
+
+
+def generate_report(
+    server_url: str,
+    project_id: str,
+    launch_name: str | None = None,
+    token: str | None = None,
+) -> None:
+    """Trigger report generation for a project (best-effort).
+
+    Calls `/generate-report?project_id=...` on the Allure server.
+    Some setups might have auto-generation enabled; in that case this is harmless.
+    """
+
+    base_url = server_url.rstrip("/")
+    params = f"project_id={project_id}"
+    if launch_name:
+        # Allure docker service supports optional execution metadata query params
+        params += f"&execution_name={parse.quote(launch_name)}&execution_source=github-actions"
+    url = f"{base_url}/generate-report?{params}"
+
+    headers: dict[str, str] = {}
+    if token:
+        headers["X-ALLURE-TOKEN"] = token
+
+    req = request.Request(url, headers=headers, method="GET")
+    try:
+        with request.urlopen(req, timeout=60) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            log(f"Allure generate-report response ({resp.status}): {body}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"⚠️ Failed to generate Allure report for '{project_id}': {exc}. Continuing anyway.")
 
 
 def build_multipart_body(results_dir: Path, launch_name: str | None = None) -> tuple[bytes, str]:
@@ -107,7 +144,8 @@ def main() -> int:
     # Build multipart body with files[]
     body, content_type = build_multipart_body(results_dir, launch_name or None)
 
-    upload_url = server_url.rstrip("/") + f"/send-results?project_id={project_id}&force_update=true"
+    base_url = server_url.rstrip("/")
+    upload_url = base_url + f"/send-results?project_id={project_id}&force_update=true"
     headers = {"Content-Type": content_type}
     if token:
         headers["X-ALLURE-TOKEN"] = token
@@ -125,6 +163,9 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         log(f"❌ Allure upload failed: {exc}")
         return 1
+
+    # After successful upload, trigger report generation so the UI can show it
+    generate_report(base_url, project_id, launch_name or None, token)
 
     log("✅ Allure results upload finished.")
     return 0
