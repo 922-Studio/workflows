@@ -19,6 +19,9 @@ Sends email notifications via Gmail SMTP with support for both default workflow 
 
 **Documentation**: [docs/send-email.md](docs/send-email.md)
 
+### 4. Send Notification (Email + Discord)
+Sends notifications via email and/or Discord from a single reusable workflow. Supports toggling each channel independently (email only, Discord only, or both by default) and shares common workflow metadata between the email template and Discord embed.
+
 ## Usage
 
 To use this workflow in your own repository, create a new workflow file (e.g., `.github/workflows/release.yml`) with the following content:

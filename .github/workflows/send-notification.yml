@@ -1,0 +1,135 @@
+name: Send Notification (Email + Discord)
+
+on:
+  workflow_call:
+    inputs:
+      # Email-related inputs (same as send-email workflow)
+      recipients:
+        required: false
+        type: string
+        description: "JSON array of recipient email addresses, e.g. [\"user1@example.com\", \"user2@example.com\"]"
+      subject:
+        required: false
+        type: string
+        description: "Email subject line"
+      sender_name:
+        required: false
+        type: string
+        default: "Home-Lab Bot"
+        description: "Display name for the email sender"
+      custom_body_html:
+        required: false
+        type: string
+        description: "Custom HTML body for the email (optional, if not provided uses default template)"
+
+      # Shared workflow metadata (used in both email template and Discord embed)
+      workflow_status:
+        required: false
+        type: string
+        description: "Status of the workflow (success, failure, etc.)"
+      workflow_name:
+        required: false
+        type: string
+        description: "Name of the workflow that triggered the notification"
+      repository_name:
+        required: false
+        type: string
+        description: "Repository name"
+      run_url:
+        required: false
+        type: string
+        description: "URL to the workflow run"
+
+      # Channel toggles
+      enable_email:
+        required: false
+        type: boolean
+        default: true
+        description: "Whether to send an email notification"
+      enable_discord:
+        required: false
+        type: boolean
+        default: true
+        description: "Whether to send a Discord notification"
+
+      # Discord-specific inputs
+      discord_channel_id:
+        required: false
+        type: string
+        default: "1465354445113000032"
+        description: "Discord channel ID to send the notification to (defaults to your main notifications channel)"
+
+    secrets:
+      GMAIL_APP_PASSWORD:
+        required: false
+        description: "Gmail App Password for SMTP authentication (required if enable_email is true)"
+      DISCORD_BOT_TOKEN:
+        required: false
+        description: "Discord bot token (required if enable_discord is true)"
+      PAT_GITHUB:
+        required: false
+        description: "Personal Access Token to clone private repos (optional)"
+
+jobs:
+  notify:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout Workflow Scripts
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: workflow-scripts
+          token: ${{ secrets.PAT_GITHUB }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing notification dependencies (stdlib only for now)..."
+          python --version
+          echo "✅ Ready to send notifications."
+
+      - name: Send email notification
+        if: inputs.enable_email
+        env:
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          SENDER_EMAIL: "gregor160505@gmail.com"
+          SENDER_NAME: ${{ inputs.sender_name }}
+          RECIPIENTS: ${{ inputs.recipients }}
+          SUBJECT: ${{ inputs.subject }}
+          CUSTOM_BODY_HTML: ${{ inputs.custom_body_html }}
+          WORKFLOW_STATUS: ${{ inputs.workflow_status }}
+          WORKFLOW_NAME: ${{ inputs.workflow_name }}
+          REPOSITORY_NAME: ${{ inputs.repository_name }}
+          RUN_URL: ${{ inputs.run_url }}
+        run: |
+          echo "📧 Email notifications are enabled. Running email sender..."
+          python workflow-scripts/.github/scripts/send_email.py
+
+      - name: Send Discord notification
+        if: inputs.enable_discord
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_CHANNEL_ID: ${{ inputs.discord_channel_id }}
+          WORKFLOW_STATUS: ${{ inputs.workflow_status }}
+          WORKFLOW_NAME: ${{ inputs.workflow_name }}
+          REPOSITORY_NAME: ${{ inputs.repository_name }}
+          RUN_URL: ${{ inputs.run_url }}
+        run: |
+          echo "💬 Discord notifications are enabled. Running Discord sender..."
+          python workflow-scripts/.github/scripts/send_discord.py
+
+      - name: Log notification summary
+        if: always()
+        run: |
+          echo "==========================================="
+          echo "📣 Notification Workflow Complete"
+          echo "==========================================="
+          echo "Email enabled:   ${{ inputs.enable_email }}"
+          echo "Discord enabled: ${{ inputs.enable_discord }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "==========================================="
