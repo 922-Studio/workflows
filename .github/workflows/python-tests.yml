@@ -53,24 +53,55 @@ on:
         type: string
         default: ''
         description: 'Optional launch name/label for this test run'
+      api_base_url:
+        required: true
+        type: string
+        description: 'Value for API_BASE_URL during tests'
+      github_owner:
+        required: true
+        type: string
+        description: 'Value for GITHUB_OWNER during tests'
+      github_repo:
+        required: true
+        type: string
+        description: 'Value for GITHUB_REPO during tests'
+      google_sheet_id:
+        required: true
+        type: string
+        description: 'Value for GOOGLE_SHEET_ID during tests'
+      google_service_account_file:
+        required: true
+        type: string
+        description: 'Value for GOOGLE_SERVICE_ACCOUNT_FILE during tests'
+      database_url:
+        required: true
+        type: string
+        description: 'Value for DATABASE_URL during tests'
+      discord_bot_token:
+        required: true
+        type: string
+        description: 'Value for DISCORD_BOT_TOKEN during tests'
     secrets:
       ALLURE_TOKEN:
         required: false
         description: 'Auth token for the Allure server (if required)'
+      GEMINI_API_KEY:
+        required: false
+        description: 'Gemini API key to expose as GEMINI_API_KEY during tests'
 
 jobs:
   tests:
     runs-on: self-hosted
 
     env:
-      # Minimal environment so config.py-style modules can import safely in CI
-      API_BASE_URL: "http://localhost:8080"
-      GITHUB_OWNER: "922-Studio"
-      GITHUB_REPO: "HomeAPI"
-      GOOGLE_SHEET_ID: "dummy-sheet-id"
-      GOOGLE_SERVICE_ACCOUNT_FILE: "dummy-service-account.json"
-      DATABASE_URL: "postgresql+asyncpg://user:pass@localhost:5432/dbname"
-      DISCORD_BOT_TOKEN: "dummy-discord-token"
+      # Base environment derived from caller inputs/secrets
+      API_BASE_URL: ${{ inputs.api_base_url }}
+      GITHUB_OWNER: ${{ inputs.github_owner }}
+      GITHUB_REPO: ${{ inputs.github_repo }}
+      GOOGLE_SHEET_ID: ${{ inputs.google_sheet_id }}
+      GOOGLE_SERVICE_ACCOUNT_FILE: ${{ inputs.google_service_account_file }}
+      DATABASE_URL: ${{ inputs.database_url }}
+      DISCORD_BOT_TOKEN: ${{ inputs.discord_bot_token }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
     steps:
