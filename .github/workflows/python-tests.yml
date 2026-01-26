@@ -222,6 +222,15 @@ jobs:
                       zf.write(full_path, rel_path)
           PY
 
+          # Ensure project exists on Allure server (idempotent create)
+          echo "Ensuring Allure project '$ALLURE_PROJECT_ID' exists..."
+          CREATE_URL="$ALLURE_SERVER_URL/projects"
+          if ! curl -sS -X POST "$CREATE_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"id\": \"$ALLURE_PROJECT_ID\"}"; then
+            echo "⚠️ Allure project create request failed (it may already exist). Continuing..."
+          fi
+
           if [ -z "$ALLURE_SERVER_URL" ]; then
             echo "⚠️ ALLURE_SERVER_URL not set. Skipping upload."
             exit 0
