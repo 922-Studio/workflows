@@ -93,6 +93,9 @@ on:
       GEMINI_API_KEY:
         required: false
         description: 'Gemini API key to expose as GEMINI_API_KEY during tests'
+      PAT_GITHUB:
+        required: false
+        description: 'Personal Access Token to clone private repos (used to fetch workflows repo)'
 
 jobs:
   tests:
@@ -126,6 +129,7 @@ jobs:
           repository: 922-Studio/workflows
           ref: main
           path: workflow-scripts
+          token: ${{ secrets.PAT_GITHUB }}
 
       - name: Checkout Application Code
         uses: actions/checkout@v4
