@@ -69,11 +69,6 @@ def build_discord_embed(workflow_status, workflow_name, repository_name, run_url
                 "value": f"{status_emoji} `{safe_status}`",
                 "inline": True,
             },
-            {
-                "name": "Workflow",
-                "value": f"`{safe_workflow}`",
-                "inline": True,
-            },
         ],
     }
 
