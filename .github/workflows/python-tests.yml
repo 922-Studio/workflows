@@ -1,0 +1,180 @@
+name: Python Tests (pytest + coverage + Allure)
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        required: false
+        type: string
+        default: '3.13'
+        description: 'Python version to use'
+      working_directory:
+        required: false
+        type: string
+        default: '.'
+        description: 'Path to the app code relative to repo root'
+      install_command:
+        required: false
+        type: string
+        default: 'pip install -r requirements.txt -r requirements-test.txt'
+        description: 'Command to install project + test dependencies'
+      pytest_args:
+        required: false
+        type: string
+        default: ''
+        description: 'Extra arguments to pass to pytest (e.g. -m "not slow")'
+      coverage_package:
+        required: false
+        type: string
+        default: 'app'
+        description: 'Package/module to measure coverage on (passed to --cov)'
+      coverage_fail_under:
+        required: false
+        type: number
+        default: 0
+        description: 'Minimum coverage percentage to enforce (0 disables enforcement)'
+      allure_results_dir:
+        required: false
+        type: string
+        default: 'reports/allure'
+        description: 'Directory where pytest should write Allure results'
+      allure_server_url:
+        required: false
+        type: string
+        default: 'http://home-lab:5050'
+        description: 'Base URL of the Allure results server (e.g. allure-docker-service)'
+      allure_project_id:
+        required: false
+        type: string
+        default: 'home-api'
+        description: 'Project identifier on the Allure server'
+      allure_launch_name:
+        required: false
+        type: string
+        default: ''
+        description: 'Optional launch name/label for this test run'
+    secrets:
+      ALLURE_TOKEN:
+        required: false
+        description: 'Auth token for the Allure server (if required)'
+
+jobs:
+  tests:
+    runs-on: self-hosted
+
+    steps:
+      - name: Log test workflow inputs
+        run: |
+          echo "Python version: ${{ inputs.python_version }}"
+          echo "Working directory: ${{ inputs.working_directory }}"
+          echo "Coverage target: ${{ inputs.coverage_package }} (min: ${{ inputs.coverage_fail_under }}%)"
+          echo "Allure results dir: ${{ inputs.allure_results_dir }}"
+          echo "Allure server: ${{ inputs.allure_server_url }}"
+          echo "Allure project id: ${{ inputs.allure_project_id }}"
+
+      - name: Checkout Application Code
+        uses: actions/checkout@v4
+        with:
+          # When this workflow is used via `uses: org/workflows/.github/workflows/python-tests.yml@...`,
+          # this checks out the *calling* repository (your API project)
+          fetch-depth: 0
+          path: app-code
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install project dependencies
+        working-directory: ./app-code
+        run: |
+          echo "📦 Installing project dependencies..."
+          echo "Running: ${{ inputs.install_command }}"
+          set -e
+          eval "${{ inputs.install_command }}"
+          echo "✅ Project dependencies installed."
+
+      - name: Install test tooling (pytest, coverage, allure)
+        working-directory: ./app-code
+        run: |
+          echo "📦 Ensuring pytest + coverage + allure plugins are installed..."
+          pip install --upgrade pip
+          pip install 'pytest>=9.0.0' pytest-cov allure-pytest
+          echo "✅ Test tooling installed."
+
+      - name: Run pytest with coverage + Allure
+        id: run_pytest
+        working-directory: ./app-code
+        env:
+          ALLURE_RESULTS_DIR: ${{ inputs.allure_results_dir }}
+          COVERAGE_PKG: ${{ inputs.coverage_package }}
+          COVERAGE_FAIL_UNDER: ${{ inputs.coverage_fail_under }}
+        run: |
+          set -e
+          echo "🧪 Running pytest with coverage and Allure..."
+          mkdir -p "$ALLURE_RESULTS_DIR" reports
+
+          # Build coverage args
+          COV_ARGS="--cov=$COVERAGE_PKG --cov-report=xml:reports/coverage.xml"
+          if [ "$COVERAGE_FAIL_UNDER" != "0" ]; then
+            COV_ARGS="$COV_ARGS --cov-fail-under=$COVERAGE_FAIL_UNDER"
+          fi
+
+          echo "pytest $COV_ARGS --alluredir=$ALLURE_RESULTS_DIR ${{ inputs.pytest_args }}"
+
+          pytest \
+            $COV_ARGS \
+            --alluredir="$ALLURE_RESULTS_DIR" \
+            ${{ inputs.pytest_args }}
+
+          echo "✅ Pytest run completed."
+
+      - name: Upload coverage and allure results as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            app-code/${{ inputs.allure_results_dir }}
+            app-code/reports/coverage.xml
+
+      - name: Upload Allure results to external server
+        if: always()
+        working-directory: ./app-code
+        env:
+          ALLURE_RESULTS_DIR: ${{ inputs.allure_results_dir }}
+          ALLURE_SERVER_URL: ${{ inputs.allure_server_url }}
+          ALLURE_PROJECT_ID: ${{ inputs.allure_project_id }}
+          ALLURE_LAUNCH_NAME: ${{ inputs.allure_launch_name }}
+          ALLURE_TOKEN: ${{ secrets.ALLURE_TOKEN }}
+        run: |
+          set -e
+          echo "🚀 Preparing Allure results for upload..."
+          if [ ! -d "$ALLURE_RESULTS_DIR" ]; then
+            echo "⚠️ Allure results directory '$ALLURE_RESULTS_DIR' not found. Skipping upload."
+            exit 0
+          fi
+
+          ARCHIVE_NAME="allure-results-$(date +%s).zip"
+          echo "Zipping Allure results from '$ALLURE_RESULTS_DIR' into '$ARCHIVE_NAME'..."
+          zip -r "$ARCHIVE_NAME" "$ALLURE_RESULTS_DIR"
+
+          if [ -z "$ALLURE_SERVER_URL" ]; then
+            echo "⚠️ ALLURE_SERVER_URL not set. Skipping upload."
+            exit 0
+          fi
+
+          # Example for allure-docker-service style API. Adjust field names/URL if your server differs.
+          UPLOAD_URL="$ALLURE_SERVER_URL/send-results?project_id=$ALLURE_PROJECT_ID&force_update=true"
+          echo "Uploading results to: $UPLOAD_URL"
+
+          CURL_CMD=(curl -sS -X POST "$UPLOAD_URL" \
+            -H "Content-Type: multipart/form-data" \
+            -F "results=@$ARCHIVE_NAME")
+
+          if [ -n "$ALLURE_TOKEN" ]; then
+            CURL_CMD+=( -H "X-ALLURE-TOKEN: $ALLURE_TOKEN" )
+          fi
+
+          "${CURL_CMD[@]}"
+          echo "✅ Allure results uploaded (or upload attempted)."
