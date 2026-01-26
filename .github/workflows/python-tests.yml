@@ -220,7 +220,7 @@ jobs:
                       full_path = os.path.join(root, name)
                       rel_path = os.path.relpath(full_path, results_dir)
                       zf.write(full_path, rel_path)
-PY
+          PY
 
           if [ -z "$ALLURE_SERVER_URL" ]; then
             echo "⚠️ ALLURE_SERVER_URL not set. Skipping upload."
