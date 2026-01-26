@@ -86,6 +86,16 @@ on:
         type: string
         default: ''
         description: 'Value for GITHUB_TOKEN during tests (optional, use dummy or real token)'
+      enable_notifications:
+        required: false
+        type: boolean
+        default: false
+        description: 'Whether to send notifications via send-notification workflow on test failure'
+      notification_recipients:
+        required: false
+        type: string
+        default: '["gregor160505@gmail.com"]'
+        description: 'JSON array of email addresses for failure notifications'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -93,6 +103,12 @@ on:
       GEMINI_API_KEY:
         required: false
         description: 'Gemini API key to expose as GEMINI_API_KEY during tests'
+      GMAIL_APP_PASSWORD:
+        required: false
+        description: 'Gmail App Password for SMTP authentication (used for failure notifications)'
+      DISCORD_BOT_TOKEN:
+        required: false
+        description: 'Discord bot token (used for failure notifications)'
       PAT_GITHUB:
         required: false
         description: 'Personal Access Token to clone private repos (used to fetch workflows repo)'
@@ -100,6 +116,10 @@ on:
 jobs:
   tests:
     runs-on: self-hosted
+
+    outputs:
+      failed_tests: ${{ steps.test_summary.outputs.failed_tests }}
+      total_tests: ${{ steps.test_summary.outputs.total_tests }}
 
     env:
       # Base environment derived from caller inputs/secrets
@@ -173,20 +193,61 @@ jobs:
           echo "🧪 Running pytest with coverage and Allure..."
           mkdir -p "$ALLURE_RESULTS_DIR" reports
 
+          JUNIT_XML="reports/junit.xml"
+
           # Build coverage args
           COV_ARGS="--cov=$COVERAGE_PKG --cov-report=xml:reports/coverage.xml"
           if [ "$COVERAGE_FAIL_UNDER" != "0" ]; then
             COV_ARGS="$COV_ARGS --cov-fail-under=$COVERAGE_FAIL_UNDER"
           fi
 
-          echo "pytest $COV_ARGS --alluredir=$ALLURE_RESULTS_DIR ${{ inputs.pytest_args }}"
+          echo "pytest $COV_ARGS --alluredir=$ALLURE_RESULTS_DIR --junitxml=$JUNIT_XML ${{ inputs.pytest_args }}"
 
           pytest \
             $COV_ARGS \
             --alluredir="$ALLURE_RESULTS_DIR" \
+            --junitxml="$JUNIT_XML" \
             ${{ inputs.pytest_args }}
 
           echo "✅ Pytest run completed."
+
+      - name: Compute pytest summary (failed/total)
+        id: test_summary
+        if: always()
+        working-directory: ./app-code
+        run: |
+          python - << 'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          junit_path = Path("reports/junit.xml")
+          failed = 0
+          total = 0
+
+          if junit_path.exists():
+              tree = ET.parse(junit_path)
+              root = tree.getroot()
+
+              if root.tag == "testsuites":
+                  suites = root.findall("testsuite")
+              elif root.tag == "testsuite":
+                  suites = [root]
+              else:
+                  suites = []
+
+              for ts in suites:
+                  total += int(ts.attrib.get("tests", 0))
+                  failed += int(ts.attrib.get("failures", 0)) + int(ts.attrib.get("errors", 0))
+
+          print(f"Total tests: {total}")
+          print(f"Failed tests: {failed}")
+
+          github_output = os.environ["GITHUB_OUTPUT"]
+          with open(github_output, "a", encoding="utf-8") as fh:
+              fh.write(f"failed_tests={failed}\n")
+              fh.write(f"total_tests={total}\n")
+          PY
 
       - name: Upload coverage and allure results as artifacts
         if: always()
@@ -210,3 +271,29 @@ jobs:
           set -e
           echo "🚀 Preparing Allure results for upload (via Python helper)..."
           python workflow-scripts/.github/scripts/upload_allure_results.py
+
+  notify-on-failure:
+    needs: tests
+    if: ${{ failure() && inputs.enable_notifications }}
+    uses: ./.github/workflows/send-notification.yml
+    with:
+      enable_email: true
+      enable_discord: false
+      recipients: ${{ inputs.notification_recipients }}
+      subject: >-
+        ❌ Pytest failed in ${{ github.repository }}
+        (${{ needs.tests.outputs.failed_tests }} of ${{ needs.tests.outputs.total_tests }} tests failed)
+      workflow_status: 'failure'
+      workflow_name: ${{ github.workflow }}
+      repository_name: ${{ github.repository }}
+      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      custom_body_html: >-
+        <p>Pytest run failed for <strong>${{ github.repository }}</strong>.</p>
+        <p><strong>Failed tests:</strong> ${{ needs.tests.outputs.failed_tests }} of
+        ${{ needs.tests.outputs.total_tests }} total.</p>
+        <p>Workflow: <code>${{ github.workflow }}</code><br/>
+        Run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View details</a></p>
+    secrets:
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      PAT_GITHUB: ${{ secrets.PAT_GITHUB }}

@@ -49,7 +49,6 @@ def build_discord_embed(workflow_status, workflow_name, repository_name, run_url
         safe_repo = repository_name or "N/A"
 
     description_lines = [
-        f"**Status:** {status_emoji} `{safe_status}`",
         f"**Workflow:** `{safe_workflow}`",
         f"**Repository:** `{safe_repo}`",
     ]
