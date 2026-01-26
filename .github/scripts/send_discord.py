@@ -42,7 +42,11 @@ def build_discord_embed(workflow_status, workflow_name, repository_name, run_url
 
     safe_status = workflow_status or "Unknown"
     safe_workflow = workflow_name or "N/A"
-    safe_repo = repository_name or "N/A"
+    # Show only the repo name without the owner (e.g. "HomeAPI" instead of "922-Studio/HomeAPI")
+    if repository_name and "/" in repository_name:
+        safe_repo = repository_name.split("/", 1)[1]
+    else:
+        safe_repo = repository_name or "N/A"
 
     description_lines = [
         f"**Status:** {status_emoji} `{safe_status}`",
@@ -69,11 +73,6 @@ def build_discord_embed(workflow_status, workflow_name, repository_name, run_url
                 "name": "Workflow",
                 "value": f"`{safe_workflow}`",
                 "inline": True,
-            },
-            {
-                "name": "Repository",
-                "value": f"`{safe_repo}`",
-                "inline": False,
             },
         ],
     }
