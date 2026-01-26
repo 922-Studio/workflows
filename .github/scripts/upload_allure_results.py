@@ -26,7 +26,7 @@ def ensure_project(server_url: str, project_id: str, token: str | None = None) -
     if token:
         headers["X-ALLURE-TOKEN"] = token
 
-    req = request.Request(create_url, data=payload, headers=headers
+    req = request.Request(create_url, data=payload, headers=headers)
     try:
         with request.urlopen(req, timeout=10) as resp:
             body = resp.read().decode("utf-8", errors="replace")
