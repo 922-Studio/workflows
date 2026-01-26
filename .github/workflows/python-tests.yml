@@ -81,6 +81,11 @@ on:
         required: true
         type: string
         description: 'Value for DISCORD_BOT_TOKEN during tests'
+      github_token:
+        required: false
+        type: string
+        default: ''
+        description: 'Value for GITHUB_TOKEN during tests (optional, use dummy or real token)'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -102,6 +107,7 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT_FILE: ${{ inputs.google_service_account_file }}
       DATABASE_URL: ${{ inputs.database_url }}
       DISCORD_BOT_TOKEN: ${{ inputs.discord_bot_token }}
+      GITHUB_TOKEN: ${{ inputs.github_token }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
     steps:
