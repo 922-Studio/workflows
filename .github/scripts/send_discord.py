@@ -61,7 +61,9 @@ def build_discord_embed(workflow_status, workflow_name, repository_name, run_url
         "title": f"{status_emoji} Workflow {status_text}",
         "description": "\n".join(description_lines),
         "color": color,
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.datetime.now(datetime.timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
         "fields": [
             {
                 "name": "Status",
@@ -102,6 +104,7 @@ def send_discord_status_update(
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bot {bot_token}",
+        "User-Agent": "DiscordBot (https://github.com/922-Studio/HomeAPI, 1.0)",
     }
 
     req = request.Request(url, data=data, headers=headers, method="POST")
