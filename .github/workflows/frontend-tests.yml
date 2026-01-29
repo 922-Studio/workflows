@@ -1,0 +1,193 @@
+name: Frontend Tests (Node + Vitest)
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        required: false
+        type: string
+        default: '20.x'
+        description: 'Node.js version to use'
+      working_directory:
+        required: false
+        type: string
+        default: '.'
+        description: 'Path to the app code relative to repo root'
+      install_command:
+        required: false
+        type: string
+        default: 'npm ci'
+        description: 'Command to install project + test dependencies'
+      test_command:
+        required: false
+        type: string
+        default: 'npm run test:ci'
+        description: 'Command to run the frontend test suite in CI mode'
+      build_command:
+        required: false
+        type: string
+        default: 'npm run build'
+        description: 'Command to build the frontend application'
+      run_build:
+        required: false
+        type: boolean
+        default: true
+        description: 'Whether to run the build_command after tests to ensure the app compiles'
+      enable_notifications:
+        required: false
+        type: boolean
+        default: false
+        description: 'Whether to send notifications via send-notification workflow on test failure'
+      notification_recipients:
+        required: false
+        type: string
+        default: '["gregor160505@gmail.com"]'
+        description: 'JSON array of email addresses for failure notifications'
+    secrets:
+      GMAIL_APP_PASSWORD:
+        required: false
+        description: 'Gmail App Password for SMTP authentication (used for failure notifications)'
+      DISCORD_BOT_TOKEN:
+        required: false
+        description: 'Discord bot token (used for failure notifications)'
+      PAT_GITHUB:
+        required: false
+        description: 'Personal Access Token to clone private repos (optional, used by send-notification workflow)'
+
+jobs:
+  tests:
+    runs-on: self-hosted
+
+    outputs:
+      failed_tests: ${{ steps.test_summary.outputs.failed_tests }}
+      total_tests: ${{ steps.test_summary.outputs.total_tests }}
+
+    steps:
+      - name: Log frontend test workflow inputs
+        run: |
+          echo "Node version: ${{ inputs.node_version }}"
+          echo "Working directory: ${{ inputs.working_directory }}"
+          echo "Install command: ${{ inputs.install_command }}"
+          echo "Test command: ${{ inputs.test_command }}"
+          echo "Build command: ${{ inputs.build_command }} (run_build=${{ inputs.run_build }})"
+
+      - name: Checkout Application Code
+        uses: actions/checkout@v4
+        with:
+          # When this workflow is used via `uses: org/workflows/.github/workflows/frontend-tests.yml@...`,
+          # this checks out the *calling* repository (your frontend project)
+          fetch-depth: 0
+          path: app-code
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: app-code/${{ inputs.working_directory }}/package-lock.json
+
+      - name: Install project dependencies
+        working-directory: ./app-code/${{ inputs.working_directory }}
+        run: |
+          echo "📦 Installing project dependencies..."
+          echo "Running: ${{ inputs.install_command }}"
+          set -e
+          eval "${{ inputs.install_command }}"
+          echo "✅ Project dependencies installed."
+
+      - name: Run frontend tests
+        id: run_tests
+        working-directory: ./app-code/${{ inputs.working_directory }}
+        env:
+          CI: true
+        run: |
+          echo "🧪 Running frontend tests..."
+          echo "Command: ${{ inputs.test_command }}"
+          set -e
+          eval "${{ inputs.test_command }}"
+          echo "✅ Frontend tests completed."
+
+      - name: Run frontend build (optional)
+        if: inputs.run_build
+        working-directory: ./app-code/${{ inputs.working_directory }}
+        env:
+          CI: true
+        run: |
+          echo "🏗️  Building frontend application..."
+          echo "Command: ${{ inputs.build_command }}"
+          set -e
+          eval "${{ inputs.build_command }}"
+          echo "✅ Frontend build completed."
+
+      - name: Compute test summary (failed/total) from JUnit, if present
+        id: test_summary
+        if: always()
+        working-directory: ./app-code/${{ inputs.working_directory }}
+        run: |
+          python - << 'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          junit_path = Path("reports/junit.xml")
+          failed = 0
+          total = 0
+
+          if junit_path.exists():
+              tree = ET.parse(junit_path)
+              root = tree.getroot()
+
+              if root.tag == "testsuites":
+                  suites = root.findall("testsuite")
+              elif root.tag == "testsuite":
+                  suites = [root]
+              else:
+                  suites = []
+
+              for ts in suites:
+                  total += int(ts.attrib.get("tests", 0))
+                  failed += int(ts.attrib.get("failures", 0)) + int(ts.attrib.get("errors", 0))
+
+          print(f"Total tests: {total}")
+          print(f"Failed tests: {failed}")
+
+          github_output = os.environ["GITHUB_OUTPUT"]
+          with open(github_output, "a", encoding="utf-8") as fh:
+              fh.write(f"failed_tests={failed}\n")
+              fh.write(f"total_tests={total}\n")
+          PY
+
+      - name: Upload test artifacts (if present)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-test-results
+          path: |
+            app-code/${{ inputs.working_directory }}/reports/junit.xml
+          if-no-files-found: ignore
+
+  notify-on-failure:
+    needs: tests
+    if: ${{ failure() && inputs.enable_notifications }}
+    uses: ./.github/workflows/send-notification.yml
+    with:
+      enable_email: true
+      enable_discord: true
+      recipients: ${{ inputs.notification_recipients }}
+      subject: >-
+        ❌ Frontend tests failed in ${{ github.repository }}
+        (${{ needs.tests.outputs.failed_tests }} of ${{ needs.tests.outputs.total_tests }} tests failed)
+      workflow_status: 'failure'
+      workflow_name: ${{ github.workflow }}
+      repository_name: ${{ github.repository }}
+      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      custom_body_html: >-
+        <p>Frontend test run failed for <strong>${{ github.repository }}</strong>.</p>
+        <p><strong>Failed tests:</strong> ${{ needs.tests.outputs.failed_tests }} of
+        ${{ needs.tests.outputs.total_tests }} total.</p>
+        <p>Workflow: <code>${{ github.workflow }}</code><br/>
+        Run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View details</a></p>
+    secrets:
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      PAT_GITHUB: ${{ secrets.PAT_GITHUB }}
