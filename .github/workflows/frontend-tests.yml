@@ -79,15 +79,25 @@ jobs:
           fetch-depth: 0
           path: app-code
 
+      - name: Resolve effective app directory
+        id: paths
+        run: |
+          WD="${{ inputs.working_directory }}"
+          if [ "$WD" = "." ] || [ -z "$WD" ]; then
+            echo "app_dir=app-code" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_dir=app-code/$WD" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
           cache: npm
-          cache-dependency-path: app-code/${{ inputs.working_directory }}/package-lock.json
+          cache-dependency-path: ${{ steps.paths.outputs.app_dir }}/package-lock.json
 
       - name: Install project dependencies
-        working-directory: ./app-code/${{ inputs.working_directory }}
+        working-directory: ${{ steps.paths.outputs.app_dir }}
         run: |
           echo "📦 Installing project dependencies..."
           echo "Running: ${{ inputs.install_command }}"
@@ -97,7 +107,7 @@ jobs:
 
       - name: Run frontend tests
         id: run_tests
-        working-directory: ./app-code/${{ inputs.working_directory }}
+        working-directory: ${{ steps.paths.outputs.app_dir }}
         env:
           CI: true
         run: |
@@ -109,7 +119,7 @@ jobs:
 
       - name: Run frontend build (optional)
         if: inputs.run_build
-        working-directory: ./app-code/${{ inputs.working_directory }}
+        working-directory: ${{ steps.paths.outputs.app_dir }}
         env:
           CI: true
         run: |
@@ -122,9 +132,9 @@ jobs:
       - name: Compute test summary (failed/total) from JUnit, if present
         id: test_summary
         if: always()
-        working-directory: ./app-code/${{ inputs.working_directory }}
+        working-directory: ${{ steps.paths.outputs.app_dir }}
         run: |
-          python - << 'PY'
+          python3 - << 'PY'
           import os
           from pathlib import Path
           import xml.etree.ElementTree as ET
@@ -163,7 +173,7 @@ jobs:
         with:
           name: frontend-test-results
           path: |
-            app-code/${{ inputs.working_directory }}/reports/junit.xml
+            ${{ steps.paths.outputs.app_dir }}/reports/junit.xml
           if-no-files-found: ignore
 
   notify-on-failure:
