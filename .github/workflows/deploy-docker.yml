@@ -8,8 +8,9 @@ on:
         type: string
         description: "Absolute path to the repository on the self-hosted runner"
       docker_compose_file:
-        required: true
+        required: false
         type: string
+        default: "docker-compose.yaml"
         description: "Path to docker compose file relative to repository root"
       service_name:
         required: false
@@ -19,6 +20,10 @@ on:
         required: false
         type: string
         description: "Working directory for docker compose commands (defaults to repository_path)"
+      boot_script:
+        required: false
+        type: string
+        description: "Path to a boot/deploy script relative to repository_path (optional, replaces default docker compose stop/up/cleanup steps)"
     secrets:
       PAT_GITHUB:
         required: false
@@ -37,6 +42,7 @@ jobs:
           echo "Docker Compose File: ${{ inputs.docker_compose_file }}"
           echo "Service Name: ${{ inputs.service_name || 'ALL SERVICES' }}"
           echo "Working Directory: ${{ inputs.working_directory || 'repository root' }}"
+          echo "Boot Script: ${{ inputs.boot_script || 'none (using default docker compose steps)' }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
 
@@ -44,18 +50,18 @@ jobs:
         working-directory: ${{ inputs.repository_path }}
         run: |
           echo "🔐 Configuring git credentials..."
-          
+
           # Get current remote URL
           REMOTE_URL=$(git config --get remote.origin.url)
           echo "Current remote: $REMOTE_URL"
-          
+
           # If HTTPS URL and PAT provided, configure credential helper
           if [[ "$REMOTE_URL" == https://* ]] && [ -n "${{ secrets.PAT_GITHUB }}" ]; then
             echo "Configuring HTTPS authentication with PAT..."
-            
+
             # Extract repo path from URL
             REPO_PATH=$(echo "$REMOTE_URL" | sed 's|https://github.com/||')
-            
+
             # Set authenticated URL
             git remote set-url origin "https://x-access-token:${{ secrets.PAT_GITHUB }}@github.com/$REPO_PATH"
             echo "✅ Git credentials configured"
@@ -71,13 +77,13 @@ jobs:
           echo "📥 Pulling latest changes from remote..."
           echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
           echo "Current commit: $(git rev-parse HEAD)"
-          
+
           git fetch origin
           echo "✅ Fetch completed"
-          
+
           git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
           echo "✅ Reset to latest commit"
-          
+
           echo "New commit: $(git rev-parse HEAD)"
           echo "Last commit message: $(git log -1 --pretty=%B)"
 
@@ -86,10 +92,10 @@ jobs:
         working-directory: ${{ inputs.repository_path }}
         run: |
           echo "🧹 Cleaning up git credentials..."
-          
+
           # Get current remote URL
           REMOTE_URL=$(git config --get remote.origin.url)
-          
+
           # If it contains the token, restore to regular HTTPS URL
           if [[ "$REMOTE_URL" == *"x-access-token"* ]]; then
             REPO_PATH=$(echo "$REMOTE_URL" | sed 's|https://x-access-token:.*@github.com/||')
@@ -107,10 +113,10 @@ jobs:
           else
             WORKDIR="${{ inputs.repository_path }}"
           fi
-          
+
           echo "🔧 Setting working directory: $WORKDIR"
           echo "workdir=$WORKDIR" >> $GITHUB_OUTPUT
-          
+
           if [ ! -d "$WORKDIR" ]; then
             echo "❌ ERROR: Working directory does not exist!"
             exit 1
@@ -122,12 +128,12 @@ jobs:
         run: |
           echo "🔍 Verifying docker compose file..."
           COMPOSE_FILE="${{ inputs.docker_compose_file }}"
-          
+
           if [ ! -f "$COMPOSE_FILE" ]; then
             echo "❌ ERROR: Docker compose file not found: $COMPOSE_FILE"
             exit 1
           fi
-          
+
           echo "✅ Docker compose file exists: $COMPOSE_FILE"
           echo "📄 File contents preview:"
           head -n 20 "$COMPOSE_FILE"
@@ -143,11 +149,14 @@ jobs:
           fi
         continue-on-error: true
 
+      # --- Default docker compose path (no boot_script) ---
+
       - name: Stop existing containers
+        if: inputs.boot_script == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🛑 Stopping existing containers..."
-          
+
           if [ -n "${{ inputs.service_name }}" ]; then
             echo "Stopping service: ${{ inputs.service_name }}"
             docker compose -f ${{ inputs.docker_compose_file }} stop ${{ inputs.service_name }} || echo "⚠️  Service not running"
@@ -159,22 +168,24 @@ jobs:
         continue-on-error: true
 
       - name: Deploy with zero-downtime rolling update
+        if: inputs.boot_script == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🚀 Deploying with rolling update (zero downtime)..."
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
-          
+
           if [ -n "${{ inputs.service_name }}" ]; then
             echo "Deploying service: ${{ inputs.service_name }}"
-            docker compose -f ${{ inputs.docker_compose_file }} up -d --build --force-recreate --remove-orphans --no-deps ${{ inputs.service_name }}
-            echo "✅ Service deployed"
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --build --force-recreate --remove-orphans --no-deps --wait --wait-timeout 120 ${{ inputs.service_name }}
+            echo "✅ Service deployed and healthy"
           else
             echo "Deploying all services..."
-            docker compose -f ${{ inputs.docker_compose_file }} up -d --build --force-recreate --remove-orphans
-            echo "✅ All services deployed"
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --build --force-recreate --remove-orphans --wait --wait-timeout 120
+            echo "✅ All services deployed and healthy"
           fi
 
-      - name: Clean up old images (optional)
+      - name: Clean up old images
+        if: inputs.boot_script == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🧹 Removing dangling images..."
@@ -182,25 +193,40 @@ jobs:
           echo "✅ Cleanup completed"
         continue-on-error: true
 
-      - name: Wait for containers to initialize
+      # --- Boot script path ---
+
+      - name: Run boot script
+        if: inputs.boot_script != ''
+        working-directory: ${{ inputs.repository_path }}
         run: |
-          echo "⏳ Waiting 5 seconds for containers to initialize..."
-          sleep 5
-          echo "✅ Wait completed"
+          echo "🚀 Running boot script: ${{ inputs.boot_script }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+
+          SCRIPT_PATH="${{ inputs.boot_script }}"
+
+          if [ ! -f "$SCRIPT_PATH" ]; then
+            echo "❌ ERROR: Boot script not found: $SCRIPT_PATH"
+            exit 1
+          fi
+
+          chmod +x "$SCRIPT_PATH"
+          ./"$SCRIPT_PATH"
+          echo "✅ Boot script completed"
+
+      # --- Verify (always runs regardless of path) ---
 
       - name: Verify deployment
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "✅ Verifying deployment status..."
-          
+
           if [ -n "${{ inputs.service_name }}" ]; then
             echo "Checking service: ${{ inputs.service_name }}"
             docker compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }}
-            
-            # Check if container is running
-            STATUS=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} | xargs docker inspect -f '{{.State.Status}}')
+
+            STATUS=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} | xargs docker inspect -f '{{.State.Status}}' 2>/dev/null || echo "unknown")
             echo "Container status: $STATUS"
-            
+
             if [ "$STATUS" != "running" ]; then
               echo "❌ ERROR: Container is not running!"
               exit 1
@@ -209,7 +235,7 @@ jobs:
             echo "Checking all services:"
             docker compose -f ${{ inputs.docker_compose_file }} ps
           fi
-          
+
           echo "✅ Deployment verification successful"
 
       - name: Show container logs
@@ -232,17 +258,17 @@ jobs:
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo ""
           echo "📋 Full container logs:"
-          
+
           if [ -n "${{ inputs.service_name }}" ]; then
             docker compose -f ${{ inputs.docker_compose_file }} logs --tail=100 ${{ inputs.service_name }}
           else
             docker compose -f ${{ inputs.docker_compose_file }} logs --tail=100
           fi
-          
+
           echo ""
           echo "📊 Container status:"
           docker compose -f ${{ inputs.docker_compose_file }} ps
-          
+
           echo ""
           echo "🔍 Docker system info:"
           docker system df
