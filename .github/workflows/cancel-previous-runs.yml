@@ -12,19 +12,23 @@ jobs:
       - uses: actions/github-script@v7
         with:
           script: |
-            const workflowRef = context.workflow_ref;
-            // workflowRef format: "owner/repo/.github/workflows/deploy.yml@refs/heads/main"
-            const workflowFile = workflowRef.split('/').pop().split('@')[0];
-
             const branch = context.ref_name;
 
-            core.info(`Cancelling previous runs of ${workflowFile} on branch ${branch}`);
+            // Resolve the calling workflow's ID via the API (workflow_ref is unreliable in workflow_call)
+            const currentRun = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.runId,
+            });
+            const workflowId = currentRun.data.workflow_id;
+
+            core.info(`Cancelling previous runs of workflow ${workflowId} on branch ${branch}`);
             core.info(`Current run ID: ${context.runId} (will be excluded)`);
 
             const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: workflowFile,
+              workflow_id: workflowId,
               branch: branch,
               per_page: 100,
             });
