@@ -86,16 +86,6 @@ on:
         type: string
         default: ''
         description: 'Value for GITHUB_TOKEN during tests (optional, use dummy or real token)'
-      enable_notifications:
-        required: false
-        type: boolean
-        default: false
-        description: 'Whether to send notifications via send-notification workflow on test failure'
-      notification_recipients:
-        required: false
-        type: string
-        default: '["gregor160505@gmail.com"]'
-        description: 'JSON array of email addresses for failure notifications'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -272,28 +262,3 @@ jobs:
           echo "🚀 Preparing Allure results for upload (via Python helper)..."
           python workflow-scripts/.github/scripts/upload_allure_results.py
 
-  notify-on-failure:
-    needs: tests
-    if: ${{ failure() && inputs.enable_notifications }}
-    uses: ./.github/workflows/send-notification.yml
-    with:
-      enable_email: true
-      enable_discord: false
-      recipients: ${{ inputs.notification_recipients }}
-      subject: >-
-        ❌ Pytest failed in ${{ github.repository }}
-        (${{ needs.tests.outputs.failed_tests }} of ${{ needs.tests.outputs.total_tests }} tests failed)
-      workflow_status: 'failure'
-      workflow_name: ${{ github.workflow }}
-      repository_name: ${{ github.repository }}
-      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      custom_body_html: >-
-        <p>Pytest run failed for <strong>${{ github.repository }}</strong>.</p>
-        <p><strong>Failed tests:</strong> ${{ needs.tests.outputs.failed_tests }} of
-        ${{ needs.tests.outputs.total_tests }} total.</p>
-        <p>Workflow: <code>${{ github.workflow }}</code><br/>
-        Run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View details</a></p>
-    secrets:
-      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-      PAT_GITHUB: ${{ secrets.PAT_GITHUB }}
