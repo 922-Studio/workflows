@@ -80,7 +80,7 @@ jobs:
           repository: 922-Studio/workflows
           ref: main
           path: workflow-scripts
-          token: ${{ secrets.PAT_GITHUB }}
+          token: ${{ secrets.PAT_GITHUB || github.token }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
