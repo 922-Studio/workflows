@@ -94,7 +94,7 @@ jobs:
           echo "✅ Ready to send notifications."
 
       - name: Send email notification
-        if: inputs.enable_email
+        if: always() && inputs.enable_email
         env:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           SENDER_EMAIL: "gregor160505@gmail.com"
@@ -111,7 +111,7 @@ jobs:
           python workflow-scripts/.github/scripts/send_email.py
 
       - name: Send Discord notification
-        if: inputs.enable_discord
+        if: always() && inputs.enable_discord
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_CHANNEL_ID: ${{ inputs.discord_channel_id }}
