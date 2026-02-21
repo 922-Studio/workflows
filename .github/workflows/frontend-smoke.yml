@@ -143,27 +143,3 @@ jobs:
 
           echo "📋 Recent logs for service ${{ inputs.service_name }}:"
           docker compose -f ${{ inputs.docker_compose_file }} logs --tail=50 ${{ inputs.service_name }} || echo "⚠️  Unable to fetch logs"
-
-  notify-on-failure:
-    needs: smoke
-    if: ${{ failure() && inputs.enable_notifications }}
-    uses: ./.github/workflows/send-notification.yml
-    with:
-      enable_email: true
-      enable_discord: true
-      recipients: ${{ inputs.notification_recipients }}
-      subject: >-
-        ❌ Frontend smoke test failed in ${{ github.repository }}
-      workflow_status: 'failure'
-      workflow_name: ${{ github.workflow }}
-      repository_name: ${{ github.repository }}
-      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      custom_body_html: >-
-        <p>Frontend smoke test failed for <strong>${{ github.repository }}</strong>.</p>
-        <p>Service <code>${{ inputs.service_name }}</code> at <code>${{ inputs.healthcheck_url }}</code> did not become healthy in time.</p>
-        <p>Workflow: <code>${{ github.workflow }}</code><br/>
-        Run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View details</a></p>
-    secrets:
-      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-      PAT_GITHUB: ${{ secrets.PAT_GITHUB }}

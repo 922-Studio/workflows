@@ -175,29 +175,3 @@ jobs:
           path: |
             ${{ steps.paths.outputs.app_dir }}/reports/junit.xml
           if-no-files-found: ignore
-
-  notify-on-failure:
-    needs: tests
-    if: ${{ failure() && inputs.enable_notifications }}
-    uses: ./.github/workflows/send-notification.yml
-    with:
-      enable_email: true
-      enable_discord: true
-      recipients: ${{ inputs.notification_recipients }}
-      subject: >-
-        ❌ Frontend tests failed in ${{ github.repository }}
-        (${{ needs.tests.outputs.failed_tests }} of ${{ needs.tests.outputs.total_tests }} tests failed)
-      workflow_status: 'failure'
-      workflow_name: ${{ github.workflow }}
-      repository_name: ${{ github.repository }}
-      run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      custom_body_html: >-
-        <p>Frontend test run failed for <strong>${{ github.repository }}</strong>.</p>
-        <p><strong>Failed tests:</strong> ${{ needs.tests.outputs.failed_tests }} of
-        ${{ needs.tests.outputs.total_tests }} total.</p>
-        <p>Workflow: <code>${{ github.workflow }}</code><br/>
-        Run: <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View details</a></p>
-    secrets:
-      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
-      DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-      PAT_GITHUB: ${{ secrets.PAT_GITHUB }}
