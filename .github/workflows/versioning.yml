@@ -1,10 +1,16 @@
-name: AI-Powered Versioning
+name: Semantic Versioning
 
 on:
   workflow_call:
+    inputs:
+      use_ai:
+        description: "Use Gemini AI for version determination. When false (default), uses conventional commit prefix parsing instead."
+        type: boolean
+        default: false
     secrets:
       gemini_api_key:
-        required: true
+        required: false
+        description: "Required when use_ai is true. Omit for conventional-commit mode."
       PAT_GITHUB:
         required: true
         description: "Personal Access Token to clone private repos"
@@ -42,10 +48,11 @@ jobs:
           python-version: '3.x'
 
       - name: Install dependencies
+        if: inputs.use_ai == 'true'
         run: |
-          echo "📦 Installing dependencies..."
+          echo "📦 Installing AI dependencies..."
           pip install google-generativeai
-          echo "✅ Dependencies installed."
+          echo "✅ AI dependencies installed."
 
       - name: Get latest tag
         id: latest_tag
@@ -66,9 +73,10 @@ jobs:
           else
             COMMITS=$(git log ${{ steps.latest_tag.outputs.tag }}..HEAD --pretty=format:"%s%n%b" | head -c 10000)
           fi
-          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          DELIM=$(openssl rand -hex 8)
+          echo "commits<<${DELIM}" >> $GITHUB_OUTPUT
           echo "$COMMITS" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "${DELIM}" >> $GITHUB_OUTPUT
           echo "✅ Commit messages gathered."
 
       - name: Check for new commits
@@ -104,10 +112,17 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.gemini_api_key }}
         run: |
-          echo "🧠 Determining next version with AI..."
-          NEXT_VERSION=$(python workflow-scripts/.github/scripts/determine_version.py --commits "${{ steps.commit_messages.outputs.commits }}" --version-file app-code/version.txt)
+          echo "🔍 Determining next version..."
+          USE_AI_FLAG=""
+          if [ "${{ inputs.use_ai }}" == "true" ]; then
+            USE_AI_FLAG="--use-ai"
+          fi
+          NEXT_VERSION=$(python workflow-scripts/.github/scripts/determine_version.py \
+            --commits "${{ steps.commit_messages.outputs.commits }}" \
+            --version-file app-code/version.txt \
+            $USE_AI_FLAG)
           echo "new_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
-          echo "AI determined next version: $NEXT_VERSION"
+          echo "✅ Next version determined: $NEXT_VERSION"
 
       - name: Update version file
         if: steps.version.outputs.new_version != ''
