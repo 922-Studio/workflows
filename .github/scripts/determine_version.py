@@ -95,14 +95,14 @@ def main():
     current_version = get_current_version(args.version_file)
 
     if args.use_ai:
-        print("🤖 Using Gemini AI for version determination...")
+        print("🤖 Using Gemini AI for version determination...", file=sys.stderr)
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             print("Error: GEMINI_API_KEY environment variable not set.", file=sys.stderr)
             sys.exit(1)
         bump_level = get_version_bump_from_gemini(api_key, args.commits)
     else:
-        print("🔍 Determining next version from conventional commits...")
+        print("🔍 Determining next version from conventional commits...", file=sys.stderr)
         bump_level = get_version_bump_from_commits(args.commits)
 
     next_version = get_next_version(current_version, bump_level)
