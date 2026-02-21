@@ -111,6 +111,7 @@ jobs:
         id: version
         env:
           GEMINI_API_KEY: ${{ secrets.gemini_api_key }}
+          COMMITS: ${{ steps.commit_messages.outputs.commits }}
         run: |
           echo "🔍 Determining next version..."
           USE_AI_FLAG=""
@@ -118,7 +119,7 @@ jobs:
             USE_AI_FLAG="--use-ai"
           fi
           NEXT_VERSION=$(python workflow-scripts/.github/scripts/determine_version.py \
-            --commits "${{ steps.commit_messages.outputs.commits }}" \
+            --commits "$COMMITS" \
             --version-file app-code/version.txt \
             $USE_AI_FLAG)
           echo "new_version=$NEXT_VERSION" >> $GITHUB_OUTPUT
