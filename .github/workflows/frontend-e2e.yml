@@ -1,0 +1,223 @@
+name: Frontend E2E Tests (Playwright + Allure)
+
+on:
+  workflow_call:
+    inputs:
+      node_version:
+        required: false
+        type: string
+        default: '20.x'
+        description: 'Node.js version to use'
+      working_directory:
+        required: false
+        type: string
+        default: '.'
+        description: 'Path to the app code relative to repo root'
+      install_command:
+        required: false
+        type: string
+        default: 'npm ci'
+        description: 'Command to install project + test dependencies'
+      e2e_command:
+        required: false
+        type: string
+        default: 'npx playwright test'
+        description: 'Command to run the Playwright test suite'
+      browsers:
+        required: false
+        type: string
+        default: 'chromium'
+        description: 'Space-separated list of Playwright browser projects to install (e.g. "chromium firefox")'
+      allure_results_dir:
+        required: false
+        type: string
+        default: 'allure-results'
+        description: 'Directory where allure-playwright writes its results (must match playwright.config.ts)'
+      allure_server_url:
+        required: false
+        type: string
+        default: 'http://home-lab:5050'
+        description: 'Base URL of the Allure results server (e.g. allure-docker-service)'
+      allure_project_id:
+        required: false
+        type: string
+        default: 'homeui-e2e'
+        description: 'Project identifier on the Allure server'
+      allure_launch_name:
+        required: false
+        type: string
+        default: ''
+        description: 'Optional launch name/label for this test run'
+    secrets:
+      ALLURE_TOKEN:
+        required: false
+        description: 'Auth token for the Allure server (if required)'
+      GMAIL_APP_PASSWORD:
+        required: false
+        description: 'Gmail App Password (used by send-notification if wired up)'
+      DISCORD_BOT_TOKEN:
+        required: false
+        description: 'Discord bot token (used by send-notification if wired up)'
+      PAT_GITHUB:
+        required: false
+        description: 'Personal Access Token to clone the private workflows repo'
+
+jobs:
+  e2e:
+    runs-on: self-hosted
+
+    outputs:
+      failed_tests: ${{ steps.test_summary.outputs.failed_tests }}
+      total_tests: ${{ steps.test_summary.outputs.total_tests }}
+
+    steps:
+      - name: Log e2e workflow inputs
+        run: |
+          echo "Node version:        ${{ inputs.node_version }}"
+          echo "Working directory:   ${{ inputs.working_directory }}"
+          echo "Install command:     ${{ inputs.install_command }}"
+          echo "E2E command:         ${{ inputs.e2e_command }}"
+          echo "Browsers:            ${{ inputs.browsers }}"
+          echo "Allure results dir:  ${{ inputs.allure_results_dir }}"
+          echo "Allure server:       ${{ inputs.allure_server_url }}"
+          echo "Allure project id:   ${{ inputs.allure_project_id }}"
+
+      # ── Checkout workflow scripts (for upload_allure_results.py) ─────────────
+      - name: Checkout Workflow Scripts
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: workflow-scripts
+          token: ${{ secrets.PAT_GITHUB }}
+
+      # ── Checkout application code ────────────────────────────────────────────
+      - name: Checkout Application Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          path: app-code
+
+      # ── Resolve effective app directory ──────────────────────────────────────
+      - name: Resolve effective app directory
+        id: paths
+        run: |
+          WD="${{ inputs.working_directory }}"
+          if [ "$WD" = "." ] || [ -z "$WD" ]; then
+            echo "app_dir=app-code" >> "$GITHUB_OUTPUT"
+          else
+            echo "app_dir=app-code/$WD" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Node.js ──────────────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: ${{ steps.paths.outputs.app_dir }}/package-lock.json
+
+      # ── Install dependencies ─────────────────────────────────────────────────
+      - name: Install project dependencies
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        run: |
+          echo "📦 Installing project dependencies..."
+          echo "Running: ${{ inputs.install_command }}"
+          set -e
+          eval "${{ inputs.install_command }}"
+          echo "✅ Dependencies installed."
+
+      # ── Install Playwright browser binaries ──────────────────────────────────
+      - name: Install Playwright browsers
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        run: |
+          echo "🌐 Installing Playwright browser(s): ${{ inputs.browsers }}"
+          for browser in ${{ inputs.browsers }}; do
+            npx playwright install --with-deps "$browser"
+          done
+          echo "✅ Playwright browsers installed."
+
+      # ── Run E2E tests ────────────────────────────────────────────────────────
+      - name: Run Playwright E2E tests
+        id: run_e2e
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        env:
+          CI: true
+          ALLURE_RESULTS_DIR: ${{ inputs.allure_results_dir }}
+        run: |
+          echo "🧪 Running Playwright E2E tests..."
+          echo "Command: ${{ inputs.e2e_command }}"
+          set -e
+          eval "${{ inputs.e2e_command }}"
+          echo "✅ Playwright E2E tests completed."
+
+      # ── Parse JUnit summary (if present) ─────────────────────────────────────
+      - name: Compute test summary (failed/total)
+        id: test_summary
+        if: always()
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        run: |
+          python3 - << 'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          # Playwright can emit JUnit via --reporter=junit; fall back to 0 if absent
+          junit_paths = list(Path("reports").glob("*.xml")) + [Path("test-results/junit.xml")]
+          failed = 0
+          total = 0
+
+          for junit_path in junit_paths:
+              if not junit_path.exists():
+                  continue
+              try:
+                  tree = ET.parse(junit_path)
+                  root = tree.getroot()
+                  suites = root.findall("testsuite") if root.tag == "testsuites" else ([root] if root.tag == "testsuite" else [])
+                  for ts in suites:
+                      total += int(ts.attrib.get("tests", 0))
+                      failed += int(ts.attrib.get("failures", 0)) + int(ts.attrib.get("errors", 0))
+              except Exception as e:
+                  print(f"⚠️  Could not parse {junit_path}: {e}")
+
+          print(f"Total tests: {total}")
+          print(f"Failed tests: {failed}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"failed_tests={failed}\n")
+              fh.write(f"total_tests={total}\n")
+          PY
+
+      # ── Upload Allure results to external server ─────────────────────────────
+      - name: Upload Allure results to Allure server
+        if: always()
+        env:
+          ALLURE_RESULTS_DIR: ${{ steps.paths.outputs.app_dir }}/${{ inputs.allure_results_dir }}
+          ALLURE_SERVER_URL: ${{ inputs.allure_server_url }}
+          ALLURE_PROJECT_ID: ${{ inputs.allure_project_id }}
+          ALLURE_LAUNCH_NAME: ${{ inputs.allure_launch_name }}
+          ALLURE_TOKEN: ${{ secrets.ALLURE_TOKEN }}
+        run: |
+          set -e
+          echo "🚀 Uploading Allure E2E results to server..."
+          python workflow-scripts/.github/scripts/upload_allure_results.py
+
+      # ── Preserve Playwright artifacts on failure ─────────────────────────────
+      - name: Upload Playwright traces & screenshots (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: ${{ steps.paths.outputs.app_dir }}/test-results/
+          retention-days: 3
+          if-no-files-found: ignore
+
+      # ── Archive raw allure results ────────────────────────────────────────────
+      - name: Upload Allure results as artifact (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-e2e-results
+          path: ${{ steps.paths.outputs.app_dir }}/${{ inputs.allure_results_dir }}/
+          retention-days: 7
+          if-no-files-found: ignore

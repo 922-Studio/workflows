@@ -43,7 +43,30 @@ on:
         type: string
         default: '["gregor160505@gmail.com"]'
         description: 'JSON array of email addresses for failure notifications'
+      allure_results_dir:
+        required: false
+        type: string
+        default: 'reports/allure'
+        description: 'Directory where Vitest should write Allure results (set via ALLURE_RESULTS_DIR env var)'
+      allure_server_url:
+        required: false
+        type: string
+        default: 'http://home-lab:5050'
+        description: 'Base URL of the Allure results server (e.g. allure-docker-service)'
+      allure_project_id:
+        required: false
+        type: string
+        default: 'homeui-unit'
+        description: 'Project identifier on the Allure server'
+      allure_launch_name:
+        required: false
+        type: string
+        default: ''
+        description: 'Optional launch name/label for this test run'
     secrets:
+      ALLURE_TOKEN:
+        required: false
+        description: 'Auth token for the Allure server (if required)'
       GMAIL_APP_PASSWORD:
         required: false
         description: 'Gmail App Password for SMTP authentication (used for failure notifications)'
@@ -52,7 +75,7 @@ on:
         description: 'Discord bot token (used for failure notifications)'
       PAT_GITHUB:
         required: false
-        description: 'Personal Access Token to clone private repos (optional, used by send-notification workflow)'
+        description: 'Personal Access Token to clone private repos (used to fetch workflows repo)'
 
 jobs:
   tests:
@@ -70,6 +93,18 @@ jobs:
           echo "Install command: ${{ inputs.install_command }}"
           echo "Test command: ${{ inputs.test_command }}"
           echo "Build command: ${{ inputs.build_command }} (run_build=${{ inputs.run_build }})"
+          echo "Allure results dir: ${{ inputs.allure_results_dir }}"
+          echo "Allure server: ${{ inputs.allure_server_url }}"
+          echo "Allure project id: ${{ inputs.allure_project_id }}"
+
+      # ── Checkout workflow scripts (for upload_allure_results.py) ─────────────
+      - name: Checkout Workflow Scripts
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: workflow-scripts
+          token: ${{ secrets.PAT_GITHUB }}
 
       - name: Checkout Application Code
         uses: actions/checkout@v4
@@ -110,10 +145,12 @@ jobs:
         working-directory: ${{ steps.paths.outputs.app_dir }}
         env:
           CI: true
+          ALLURE_RESULTS_DIR: ${{ inputs.allure_results_dir }}
         run: |
           echo "🧪 Running frontend tests..."
           echo "Command: ${{ inputs.test_command }}"
           set -e
+          mkdir -p "$ALLURE_RESULTS_DIR" reports
           eval "${{ inputs.test_command }}"
           echo "✅ Frontend tests completed."
 
@@ -167,6 +204,20 @@ jobs:
               fh.write(f"total_tests={total}\n")
           PY
 
+      # ── Upload Allure results to external server ──────────────────────────────
+      - name: Upload Allure results to Allure server
+        if: always()
+        env:
+          ALLURE_RESULTS_DIR: ${{ steps.paths.outputs.app_dir }}/${{ inputs.allure_results_dir }}
+          ALLURE_SERVER_URL: ${{ inputs.allure_server_url }}
+          ALLURE_PROJECT_ID: ${{ inputs.allure_project_id }}
+          ALLURE_LAUNCH_NAME: ${{ inputs.allure_launch_name }}
+          ALLURE_TOKEN: ${{ secrets.ALLURE_TOKEN }}
+        run: |
+          set -e
+          echo "🚀 Uploading Allure unit test results to server..."
+          python workflow-scripts/.github/scripts/upload_allure_results.py
+
       - name: Upload test artifacts (if present)
         if: always()
         uses: actions/upload-artifact@v4
@@ -174,4 +225,5 @@ jobs:
           name: frontend-test-results
           path: |
             ${{ steps.paths.outputs.app_dir }}/reports/junit.xml
+            ${{ steps.paths.outputs.app_dir }}/${{ inputs.allure_results_dir }}
           if-no-files-found: ignore
