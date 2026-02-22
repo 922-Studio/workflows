@@ -260,5 +260,5 @@ jobs:
         run: |
           set -e
           echo "🚀 Preparing Allure results for upload (via Python helper)..."
-          python workflow-scripts/.github/scripts/upload_allure_results.py
+          python3 workflow-scripts/.github/scripts/upload_allure_results.py
 
