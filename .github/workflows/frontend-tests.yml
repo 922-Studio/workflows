@@ -216,7 +216,7 @@ jobs:
         run: |
           set -e
           echo "🚀 Uploading Allure unit test results to server..."
-          python workflow-scripts/.github/scripts/upload_allure_results.py
+          python3 workflow-scripts/.github/scripts/upload_allure_results.py
 
       - name: Upload test artifacts (if present)
         if: always()

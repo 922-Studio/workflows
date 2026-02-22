@@ -200,7 +200,7 @@ jobs:
         run: |
           set -e
           echo "🚀 Uploading Allure E2E results to server..."
-          python workflow-scripts/.github/scripts/upload_allure_results.py
+          python3 workflow-scripts/.github/scripts/upload_allure_results.py
 
       # ── Preserve Playwright artifacts on failure ─────────────────────────────
       - name: Upload Playwright traces & screenshots (on failure)
