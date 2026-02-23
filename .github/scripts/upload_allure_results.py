@@ -13,26 +13,43 @@ def log(msg: str) -> None:
 
 
 def ensure_project(server_url: str, project_id: str, token: str | None = None) -> None:
-    """Best-effort project creation; non-fatal on error.
+    """Ensure the Allure project exists, creating it if needed (best-effort).
 
-    Some Allure Docker Service setups require manual project creation via
-    `POST /projects`. Others may not support this endpoint (and return 400).
-    We swallow all errors and let the caller continue to `send-results`.
+    First checks if the project already exists via GET /projects/{id}.
+    Only attempts creation if the project is not found (404).
+    Non-fatal on any error — let the caller continue to `send-results`.
     """
-    create_url = server_url.rstrip("/") + "/projects"
-    payload = json.dumps({"id": project_id}).encode("utf-8")
-
-    headers = {"Content-Type": "application/json"}
+    base = server_url.rstrip("/")
+    headers: dict[str, str] = {}
     if token:
         headers["X-ALLURE-TOKEN"] = token
 
-    req = request.Request(create_url, data=payload, headers=headers)
+    # Check if project already exists
+    get_req = request.Request(f"{base}/projects/{project_id}", headers=headers)
     try:
-        with request.urlopen(req, timeout=10) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-            log(f"Allure project create response ({resp.status}): {body}")
+        with request.urlopen(get_req, timeout=10) as resp:
+            resp.read()
+            # Project exists — nothing to do
+            return
+    except error.HTTPError as exc:
+        if exc.code != 404:
+            log(f"⚠️ Failed to check Allure project '{project_id}': {exc}. Continuing anyway.")
+            return
+        # 404 → project does not exist, create it below
     except Exception as exc:  # noqa: BLE001
-        log(f"⚠️ Failed to ensure Allure project '{project_id}': {exc}. Continuing anyway.")
+        log(f"⚠️ Failed to check Allure project '{project_id}': {exc}. Continuing anyway.")
+        return
+
+    # Project not found — create it
+    create_headers = {"Content-Type": "application/json", **headers}
+    payload = json.dumps({"id": project_id}).encode("utf-8")
+    create_req = request.Request(f"{base}/projects", data=payload, headers=create_headers)
+    try:
+        with request.urlopen(create_req, timeout=10) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            log(f"✅ Allure project '{project_id}' created ({resp.status}): {body}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"⚠️ Failed to create Allure project '{project_id}': {exc}. Continuing anyway.")
 
 
 def generate_report(
