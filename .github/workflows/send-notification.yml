@@ -110,6 +110,24 @@ jobs:
           echo "📧 Email notifications are enabled. Running email sender..."
           python workflow-scripts/.github/scripts/send_email.py
 
+      - name: Get latest GitHub release tag
+        if: always() && inputs.enable_discord
+        id: get_version
+        env:
+          GH_TOKEN: ${{ secrets.PAT_GITHUB || github.token }}
+          REPOSITORY_NAME: ${{ inputs.repository_name }}
+        run: |
+          if [[ "$REPOSITORY_NAME" == *"/"* ]]; then
+            REPO="$REPOSITORY_NAME"
+          else
+            REPO="${{ github.repository_owner }}/$REPOSITORY_NAME"
+          fi
+          VERSION=$(gh api "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null || true)
+          if [ -z "$VERSION" ]; then
+            VERSION=$(gh api "repos/$REPO/tags" --jq '.[0].name' 2>/dev/null || true)
+          fi
+          echo "version=${VERSION:-N/A}" >> "$GITHUB_OUTPUT"
+
       - name: Send Discord notification
         if: always() && inputs.enable_discord
         env:
@@ -119,6 +137,7 @@ jobs:
           WORKFLOW_NAME: ${{ inputs.workflow_name }}
           REPOSITORY_NAME: ${{ inputs.repository_name }}
           RUN_URL: ${{ inputs.run_url }}
+          LATEST_VERSION: ${{ steps.get_version.outputs.version }}
         run: |
           echo "💬 Discord notifications are enabled. Running Discord sender..."
           python workflow-scripts/.github/scripts/send_discord.py

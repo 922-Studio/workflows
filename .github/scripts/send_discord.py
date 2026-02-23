@@ -36,7 +36,7 @@ def build_status_style(workflow_status: str):
     return int("007bff", 16), "ℹ️", "Completed"
 
 
-def build_discord_embed(workflow_status, workflow_name, repository_name, run_url):
+def build_discord_embed(workflow_status, workflow_name, repository_name, run_url, latest_version=None):
     """Build a rich Discord embed payload for the workflow notification."""
     color, status_emoji, status_text = build_status_style(workflow_status)
 
@@ -52,6 +52,9 @@ def build_discord_embed(workflow_status, workflow_name, repository_name, run_url
         f"**Workflow:** `{safe_workflow}`",
         f"**Repository:** `{safe_repo}`",
     ]
+
+    if latest_version and latest_version != "N/A":
+        description_lines.append(f"**Version:** `{latest_version}`")
 
     if run_url:
         description_lines.append("")
@@ -86,12 +89,13 @@ def send_discord_status_update(
     workflow_name: str | None,
     repository_name: str | None,
     run_url: str | None,
+    latest_version: str | None = None,
 ) -> bool:
     """Send a status update message with an embed to a Discord channel.
 
     Returns True on success, False otherwise.
     """
-    embed = build_discord_embed(workflow_status, workflow_name, repository_name, run_url)
+    embed = build_discord_embed(workflow_status, workflow_name, repository_name, run_url, latest_version)
 
     payload: dict = {
         "content": "",
@@ -140,6 +144,7 @@ def main():
     workflow_name = os.getenv("WORKFLOW_NAME")
     repository_name = os.getenv("REPOSITORY_NAME")
     run_url = os.getenv("RUN_URL")
+    latest_version = os.getenv("LATEST_VERSION")
 
     if not bot_token:
         print("❌ ERROR: DISCORD_BOT_TOKEN is not set")
@@ -158,6 +163,7 @@ def main():
         workflow_name=workflow_name,
         repository_name=repository_name,
         run_url=run_url,
+        latest_version=latest_version,
     )
 
     if not success:
