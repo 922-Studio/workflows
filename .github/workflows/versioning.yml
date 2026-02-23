@@ -31,7 +31,6 @@ jobs:
       - name: Checkout Application Code
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           path: app-code
 
       - name: Checkout Workflow Scripts
@@ -54,25 +53,12 @@ jobs:
           pip install google-generativeai
           echo "✅ AI dependencies installed."
 
-      - name: Get latest tag
-        id: latest_tag
-        working-directory: ./app-code
-        run: |
-          echo "🏷️ Getting latest tag..."
-          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo 'none')
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Latest tag: $TAG"
-
       - name: Get commit messages
         id: commit_messages
         working-directory: ./app-code
         run: |
           echo "📝 Getting commit messages..."
-          if [ "${{ steps.latest_tag.outputs.tag }}" == "none" ]; then
-            COMMITS=$(git log --pretty=format:"%s%n%b" | head -c 10000)
-          else
-            COMMITS=$(git log ${{ steps.latest_tag.outputs.tag }}..HEAD --pretty=format:"%s%n%b" | head -c 10000)
-          fi
+          COMMITS=$(git log -1 --pretty=format:"%s%n%b")
           DELIM=$(openssl rand -hex 8)
           echo "commits<<${DELIM}" >> $GITHUB_OUTPUT
           echo "$COMMITS" >> $GITHUB_OUTPUT
