@@ -117,8 +117,19 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ steps.paths.outputs.app_dir }}/package-lock.json
 
+      # ── Cache node_modules ───────────────────────────────────────────────────
+      - name: Cache node_modules
+        id: npm-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.paths.outputs.app_dir }}/node_modules
+          key: ${{ runner.os }}-node-${{ inputs.node_version }}-${{ hashFiles(format('{0}/package-lock.json', steps.paths.outputs.app_dir)) }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ inputs.node_version }}-
+
       # ── Install dependencies ─────────────────────────────────────────────────
       - name: Install project dependencies
+        if: steps.npm-cache.outputs.cache-hit != 'true'
         working-directory: ${{ steps.paths.outputs.app_dir }}
         run: |
           echo "📦 Installing project dependencies..."
@@ -126,6 +137,10 @@ jobs:
           set -e
           eval "${{ inputs.install_command }}"
           echo "✅ Dependencies installed."
+
+      - name: Use cached node_modules
+        if: steps.npm-cache.outputs.cache-hit == 'true'
+        run: echo "✅ node_modules restored from cache — skipping install."
 
       # ── Install Playwright browser binaries ──────────────────────────────────
       - name: Install Playwright browsers
