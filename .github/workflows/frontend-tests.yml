@@ -129,17 +129,26 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
-      - name: Cache node_modules
+      - name: Restore node_modules (local disk cache)
         id: npm-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.paths.outputs.app_dir }}/node_modules
-          key: ${{ runner.os }}-node-${{ inputs.node_version }}-${{ hashFiles(format('{0}/package-lock.json', steps.paths.outputs.app_dir)) }}
-          restore-keys: |
-            ${{ runner.os }}-node-${{ inputs.node_version }}-
+        run: |
+          CACHE_BASE="/home/lab/runner-cache/node-modules"
+          mkdir -p "$CACHE_BASE"
+          HASH=$(sha256sum "${{ steps.paths.outputs.app_dir }}/package-lock.json" | awk '{print $1}')
+          CACHE_PATH="$CACHE_BASE/$HASH"
+          echo "cache_path=$CACHE_PATH" >> "$GITHUB_ENV"
+          if [ -d "$CACHE_PATH" ]; then
+            echo "🎯 Cache hit — restoring node_modules from local disk..."
+            cp -al "$CACHE_PATH" "${{ steps.paths.outputs.app_dir }}/node_modules"
+            echo "npm_cache_hit=true" >> "$GITHUB_OUTPUT"
+            echo "✅ Done (local I/O only, no network)."
+          else
+            echo "❌ Cache miss — will run install."
+            echo "npm_cache_hit=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install project dependencies
-        if: steps.npm-cache.outputs.cache-hit != 'true'
+        if: steps.npm-cache.outputs.npm_cache_hit != 'true'
         working-directory: ${{ steps.paths.outputs.app_dir }}
         run: |
           echo "📦 Installing project dependencies..."
@@ -148,9 +157,21 @@ jobs:
           eval "${{ inputs.install_command }}"
           echo "✅ Project dependencies installed."
 
-      - name: Use cached node_modules
-        if: steps.npm-cache.outputs.cache-hit == 'true'
-        run: echo "✅ node_modules restored from cache — skipping install."
+      - name: Save node_modules to local disk cache
+        if: steps.npm-cache.outputs.npm_cache_hit != 'true'
+        run: |
+          CACHE_PATH="${{ env.cache_path }}"
+          if [ ! -d "$CACHE_PATH" ]; then
+            echo "💾 Saving node_modules to local disk cache..."
+            TEMP="${CACHE_PATH}.tmp.$$"
+            cp -a "${{ steps.paths.outputs.app_dir }}/node_modules" "$TEMP"
+            mv "$TEMP" "$CACHE_PATH" 2>/dev/null || rm -rf "$TEMP"
+            echo "✅ Saved to: $CACHE_PATH"
+            # Keep only 5 most recent cache versions
+            ls -1dt /home/lab/runner-cache/node-modules/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf
+          else
+            echo "Cache already populated (parallel runner race handled)."
+          fi
 
       - name: Run frontend tests
         id: run_tests
