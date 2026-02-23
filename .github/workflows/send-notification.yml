@@ -122,9 +122,9 @@ jobs:
           else
             REPO="${{ github.repository_owner }}/$REPOSITORY_NAME"
           fi
-          VERSION=$(gh api "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null || true)
-          if [ -z "$VERSION" ]; then
-            VERSION=$(gh api "repos/$REPO/tags" --jq '.[0].name' 2>/dev/null || true)
+          VERSION=$(gh api "repos/$REPO/releases/latest" --jq '.tag_name' 2>/dev/null) || VERSION=""
+          if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+            VERSION=$(gh api "repos/$REPO/tags" --jq '.[0].name' 2>/dev/null) || VERSION=""
           fi
           echo "version=${VERSION:-N/A}" >> "$GITHUB_OUTPUT"
 
