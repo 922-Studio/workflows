@@ -114,8 +114,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-          cache: npm
-          cache-dependency-path: ${{ steps.paths.outputs.app_dir }}/package-lock.json
 
       # ── Cache node_modules ───────────────────────────────────────────────────
       - name: Cache node_modules
