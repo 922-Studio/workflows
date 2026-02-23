@@ -140,6 +140,10 @@ jobs:
           if [ -d "$CACHE_PATH" ]; then
             echo "🎯 Cache hit — restoring node_modules from local disk..."
             cp -al "$CACHE_PATH" "${{ steps.paths.outputs.app_dir }}/node_modules"
+            # Remove Vite's transform cache — it contains absolute paths from the
+            # run that created the cache and would cause Vitest resolver failures
+            # on any other runner or workspace path.
+            rm -rf "${{ steps.paths.outputs.app_dir }}/node_modules/.vite"
             echo "npm_cache_hit=true" >> "$GITHUB_OUTPUT"
             echo "✅ Done (local I/O only, no network)."
           else
