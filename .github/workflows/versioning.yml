@@ -138,6 +138,7 @@ jobs:
             echo "ℹ️ No changes to version file. Skipping commit."
           else
             git commit -m "chore: Update version to ${{ steps.version.outputs.new_version }} [ci skip]"
+            git pull --rebase
             git push
             echo "✅ Version file committed and pushed."
           fi
