@@ -63,6 +63,11 @@ on:
         type: string
         default: ''
         description: 'Optional launch name/label for this test run'
+      env_file_source:
+        required: false
+        type: string
+        default: ''
+        description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -113,6 +118,13 @@ jobs:
           # this checks out the *calling* repository (your frontend project)
           fetch-depth: 0
           path: app-code
+
+      - name: Copy .env from runner
+        if: inputs.env_file_source != ''
+        run: |
+          echo "📋 Copying .env from ${{ inputs.env_file_source }}..."
+          cp "${{ inputs.env_file_source }}" app-code/.env
+          echo "✅ .env file copied into workspace."
 
       - name: Resolve effective app directory
         id: paths
