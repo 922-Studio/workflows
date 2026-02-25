@@ -1,0 +1,369 @@
+name: Smoke Test (Docker Compose)
+
+on:
+  workflow_call:
+    inputs:
+      repository_path:
+        required: true
+        type: string
+        description: 'Absolute path to the repository on the self-hosted runner'
+      docker_compose_file:
+        required: false
+        type: string
+        default: 'docker-compose.yaml'
+        description: 'Path to docker compose file relative to repository root'
+      working_directory:
+        required: false
+        type: string
+        description: 'Working directory for docker compose commands (defaults to repository_path)'
+      expected_services:
+        required: false
+        type: string
+        description: 'Comma-separated list of expected service names (e.g. "db,api,redis,worker"). If omitted, discovers all services from compose file'
+      healthcheck_urls:
+        required: false
+        type: string
+        description: 'JSON map of service→URL for HTTP health checks (e.g. {"api":"http://localhost:8080/health"})'
+        default: '{}'
+      migration_service:
+        required: false
+        type: string
+        description: 'Service name that runs DB migrations on startup (checks logs for migration success/failure)'
+      migration_success_pattern:
+        required: false
+        type: string
+        default: 'Running upgrade'
+        description: 'Log pattern indicating migrations ran (grep pattern)'
+      migration_failure_patterns:
+        required: false
+        type: string
+        default: 'alembic.util.exc|FAILED|sqlalchemy.exc|relation .* already exists'
+        description: 'Log patterns indicating migration failure (grep -E pattern)'
+      max_retries:
+        required: false
+        type: number
+        default: 30
+        description: 'Maximum healthcheck attempts before failing'
+      retry_delay_seconds:
+        required: false
+        type: number
+        default: 5
+        description: 'Delay between healthcheck attempts in seconds'
+    outputs:
+      result:
+        description: 'Smoke test result: "passed" or "failed"'
+        value: ${{ jobs.smoke.outputs.result }}
+
+jobs:
+  smoke:
+    runs-on: self-hosted
+    outputs:
+      result: ${{ steps.summary.outputs.result }}
+
+    steps:
+      - name: 📋 Log smoke test inputs
+        run: |
+          echo "=========================================="
+          echo "🔬 Smoke Test Configuration"
+          echo "=========================================="
+          echo "Repository path: ${{ inputs.repository_path }}"
+          echo "Docker compose file: ${{ inputs.docker_compose_file }}"
+          echo "Working directory: ${{ inputs.working_directory || 'repository root' }}"
+          echo "Expected services: ${{ inputs.expected_services || 'auto-discover' }}"
+          echo "Healthcheck URLs: ${{ inputs.healthcheck_urls }}"
+          echo "Migration service: ${{ inputs.migration_service || 'none' }}"
+          echo "Max retries: ${{ inputs.max_retries }}"
+          echo "Retry delay: ${{ inputs.retry_delay_seconds }}s"
+          echo "=========================================="
+
+      - name: 🔧 Set working directory
+        id: set_workdir
+        run: |
+          if [ -n "${{ inputs.working_directory }}" ]; then
+            WORKDIR="${{ inputs.repository_path }}/${{ inputs.working_directory }}"
+          else
+            WORKDIR="${{ inputs.repository_path }}"
+          fi
+
+          echo "workdir=$WORKDIR" >> $GITHUB_OUTPUT
+
+          if [ ! -d "$WORKDIR" ]; then
+            echo "❌ ERROR: Working directory does not exist: $WORKDIR"
+            exit 1
+          fi
+          echo "✅ Working directory verified: $WORKDIR"
+
+      - name: 🔍 Verify docker compose file
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
+          if [ ! -f "$COMPOSE_FILE" ]; then
+            echo "❌ ERROR: Docker compose file not found: $COMPOSE_FILE"
+            exit 1
+          fi
+          echo "✅ Docker compose file exists: $COMPOSE_FILE"
+
+      - name: 🐳 Discover services
+        id: discover
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
+
+          if [ -n "${{ inputs.expected_services }}" ]; then
+            SERVICES="${{ inputs.expected_services }}"
+            echo "📋 Using provided service list: $SERVICES"
+          else
+            SERVICES=$(docker compose -f "$COMPOSE_FILE" config --services | tr '\n' ',' | sed 's/,$//')
+            echo "📋 Auto-discovered services: $SERVICES"
+          fi
+
+          echo "services=$SERVICES" >> $GITHUB_OUTPUT
+
+      - name: 🏃 Check all containers are running
+        id: container_check
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
+          SERVICES="${{ steps.discover.outputs.services }}"
+          FAILED=0
+
+          echo "📊 Checking container status for all services..."
+          echo ""
+
+          docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Health}}"
+          echo ""
+
+          IFS=',' read -ra SVC_LIST <<< "$SERVICES"
+          for svc in "${SVC_LIST[@]}"; do
+            svc=$(echo "$svc" | xargs)  # trim whitespace
+
+            CONTAINER_ID=$(docker compose -f "$COMPOSE_FILE" ps -q "$svc" 2>/dev/null)
+
+            if [ -z "$CONTAINER_ID" ]; then
+              echo "❌ $svc — no container found (not started or crashed on startup)"
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
+            STATE=$(docker inspect -f '{{.State.Status}}' "$CONTAINER_ID" 2>/dev/null || echo "unknown")
+
+            if [ "$STATE" = "running" ]; then
+              echo "✅ $svc — running"
+            elif [ "$STATE" = "restarting" ]; then
+              echo "⚠️  $svc — restarting (possible crash loop)"
+              FAILED=$((FAILED + 1))
+            else
+              echo "❌ $svc — $STATE"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          echo ""
+          if [ "$FAILED" -gt 0 ]; then
+            echo "❌ $FAILED service(s) not running correctly"
+            exit 1
+          fi
+          echo "✅ All services are running"
+
+      - name: 💚 Check Docker health status
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
+          SERVICES="${{ steps.discover.outputs.services }}"
+          MAX_RETRIES=${{ inputs.max_retries }}
+          DELAY=${{ inputs.retry_delay_seconds }}
+          FAILED=0
+
+          echo "💚 Checking Docker health status for services with healthchecks..."
+          echo ""
+
+          IFS=',' read -ra SVC_LIST <<< "$SERVICES"
+          for svc in "${SVC_LIST[@]}"; do
+            svc=$(echo "$svc" | xargs)
+            CONTAINER_ID=$(docker compose -f "$COMPOSE_FILE" ps -q "$svc" 2>/dev/null)
+
+            if [ -z "$CONTAINER_ID" ]; then
+              continue
+            fi
+
+            HAS_HEALTHCHECK=$(docker inspect -f '{{if .State.Health}}yes{{else}}no{{end}}' "$CONTAINER_ID" 2>/dev/null || echo "no")
+
+            if [ "$HAS_HEALTHCHECK" = "no" ]; then
+              echo "⏭️  $svc — no healthcheck configured, skipping"
+              continue
+            fi
+
+            echo -n "⏳ $svc — waiting for healthy"
+            attempt=1
+            while [ "$attempt" -le "$MAX_RETRIES" ]; do
+              HEALTH=$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER_ID" 2>/dev/null || echo "unknown")
+
+              if [ "$HEALTH" = "healthy" ]; then
+                echo ""
+                echo "✅ $svc — healthy"
+                break
+              elif [ "$HEALTH" = "unhealthy" ]; then
+                echo ""
+                echo "❌ $svc — unhealthy"
+                echo "   Last health log:"
+                docker inspect -f '{{range .State.Health.Log}}{{.Output}}{{end}}' "$CONTAINER_ID" 2>/dev/null | tail -5
+                FAILED=$((FAILED + 1))
+                break
+              fi
+
+              echo -n "."
+              sleep "$DELAY"
+              attempt=$((attempt + 1))
+            done
+
+            if [ "$attempt" -gt "$MAX_RETRIES" ] && [ "$HEALTH" != "healthy" ]; then
+              echo ""
+              echo "❌ $svc — did not become healthy after $MAX_RETRIES attempts (status: $HEALTH)"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          echo ""
+          if [ "$FAILED" -gt 0 ]; then
+            echo "❌ $FAILED service(s) failed Docker healthcheck"
+            exit 1
+          fi
+          echo "✅ All healthchecked services are healthy"
+
+      - name: 🗃️ Check database migrations
+        if: inputs.migration_service != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
+          SVC="${{ inputs.migration_service }}"
+          SUCCESS_PATTERN="${{ inputs.migration_success_pattern }}"
+          FAILURE_PATTERNS="${{ inputs.migration_failure_patterns }}"
+
+          echo "🗃️ Checking migration status for service: $SVC"
+          echo ""
+
+          LOGS=$(docker compose -f "$COMPOSE_FILE" logs --tail=200 "$SVC" 2>&1)
+
+          # Check for failure patterns first
+          if echo "$LOGS" | grep -qE "$FAILURE_PATTERNS"; then
+            echo "❌ Migration failure detected in $SVC logs!"
+            echo ""
+            echo "Matching lines:"
+            echo "$LOGS" | grep -E "$FAILURE_PATTERNS" || true
+            echo ""
+            echo "📋 Full migration-related logs:"
+            echo "$LOGS" | grep -iE "migration|alembic|upgrade|database|schema" || true
+            exit 1
+          fi
+
+          # Check for success pattern
+          if echo "$LOGS" | grep -q "$SUCCESS_PATTERN"; then
+            echo "✅ Migrations ran successfully"
+            echo ""
+            echo "Migration log:"
+            echo "$LOGS" | grep -iE "migration|alembic|upgrade|Running" || true
+          else
+            echo "⚠️  No migration activity detected (pattern '$SUCCESS_PATTERN' not found)"
+            echo "   This may be expected if migrations were already up to date"
+          fi
+
+      - name: 🌐 HTTP health endpoint checks
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          URLS='${{ inputs.healthcheck_urls }}'
+          MAX_RETRIES=${{ inputs.max_retries }}
+          DELAY=${{ inputs.retry_delay_seconds }}
+          FAILED=0
+
+          if [ "$URLS" = "{}" ] || [ -z "$URLS" ]; then
+            echo "⏭️  No HTTP healthcheck URLs configured, skipping"
+            exit 0
+          fi
+
+          echo "🌐 Running HTTP health endpoint checks..."
+          echo ""
+
+          # Parse JSON map using Python (available on all runners)
+          ENTRIES=$(python3 -c "
+          import json, sys
+          urls = json.loads('$URLS')
+          for name, url in urls.items():
+              print(f'{name}|{url}')
+          ")
+
+          while IFS='|' read -r name url; do
+            [ -z "$name" ] && continue
+
+            echo -n "⏳ $name ($url) — "
+            attempt=1
+            SUCCESS=false
+            while [ "$attempt" -le "$MAX_RETRIES" ]; do
+              HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "000")
+
+              if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
+                echo "✅ HTTP $HTTP_CODE"
+                SUCCESS=true
+                break
+              fi
+
+              echo -n "."
+              sleep "$DELAY"
+              attempt=$((attempt + 1))
+            done
+
+            if [ "$SUCCESS" = "false" ]; then
+              echo " ❌ failed (last HTTP code: $HTTP_CODE)"
+              FAILED=$((FAILED + 1))
+            fi
+          done <<< "$ENTRIES"
+
+          echo ""
+          if [ "$FAILED" -gt 0 ]; then
+            echo "❌ $FAILED HTTP healthcheck(s) failed"
+            exit 1
+          fi
+          echo "✅ All HTTP health endpoints responding"
+
+      - name: 📊 Smoke test summary
+        id: summary
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "=========================================="
+            echo "✅ SMOKE TEST PASSED"
+            echo "=========================================="
+            echo "result=passed" >> $GITHUB_OUTPUT
+          else
+            echo "=========================================="
+            echo "❌ SMOKE TEST FAILED"
+            echo "=========================================="
+            echo "result=failed" >> $GITHUB_OUTPUT
+          fi
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+
+      - name: 📋 Show logs on failure
+        if: failure()
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
+          SERVICES="${{ steps.discover.outputs.services }}"
+
+          echo "=========================================="
+          echo "📋 Container logs (failure diagnostics)"
+          echo "=========================================="
+
+          IFS=',' read -ra SVC_LIST <<< "$SERVICES"
+          for svc in "${SVC_LIST[@]}"; do
+            svc=$(echo "$svc" | xargs)
+            echo ""
+            echo "--- $svc ---"
+            docker compose -f "$COMPOSE_FILE" logs --tail=80 "$svc" 2>/dev/null || echo "⚠️  Unable to fetch logs"
+          done
+
+          echo ""
+          echo "📊 Final container status:"
+          docker compose -f "$COMPOSE_FILE" ps || true
+
+          echo ""
+          echo "🔍 Docker system info:"
+          docker system df || true

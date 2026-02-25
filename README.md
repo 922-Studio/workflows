@@ -22,6 +22,11 @@ Sends email notifications via Gmail SMTP with support for both default workflow 
 ### 4. Send Notification (Email + Discord)
 Sends notifications via email and/or Discord from a single reusable workflow. Supports toggling each channel independently (email only, Discord only, or both by default) and shares common workflow metadata between the email template and Discord embed.
 
+### 5. Smoke Test (Docker Compose)
+Comprehensive post-deployment smoke test for Docker Compose stacks. Checks all containers are running, Docker healthchecks pass, database migrations succeeded, and HTTP health endpoints respond. Outputs per-service diagnostics on failure.
+
+**Documentation**: [docs/smoke-test.md](docs/smoke-test.md)
+
 ## Usage
 
 To use this workflow in your own repository, create a new workflow file (e.g., `.github/workflows/release.yml`) with the following content:
