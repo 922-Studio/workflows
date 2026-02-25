@@ -20,10 +20,10 @@ on:
         required: false
         type: string
         description: 'Comma-separated list of expected service names (e.g. "db,api,redis,worker"). If omitted, discovers all services from compose file'
-      healthcheck_urls:
+      healthcheck_endpoints:
         required: false
         type: string
-        description: 'JSON map of service→URL for HTTP health checks (e.g. {"api":"http://localhost:8080/health"})'
+        description: 'JSON map of service→container_port:path for HTTP health checks (e.g. {"api":"8080:/health"}). Ports are resolved dynamically since smoke uses random host ports.'
         default: '{}'
       migration_service:
         required: false
@@ -49,6 +49,19 @@ on:
         type: number
         default: 5
         description: 'Delay between healthcheck attempts in seconds'
+      pull_code:
+        required: false
+        type: boolean
+        default: true
+        description: 'Whether to pull latest code before building (default: true)'
+      env_file_source:
+        required: false
+        type: string
+        description: 'Path to .env file to copy into the working directory for smoke containers (e.g. /home/lab/MyProject/.env)'
+    secrets:
+      PAT_GITHUB:
+        required: false
+        description: 'Personal Access Token for private repos (optional, used for git pull)'
     outputs:
       result:
         description: 'Smoke test result: "passed" or "failed"'
@@ -60,8 +73,11 @@ jobs:
     outputs:
       result: ${{ steps.summary.outputs.result }}
 
+    env:
+      SMOKE_PROJECT: smoke-${{ github.run_id }}
+
     steps:
-      - name: 📋 Log smoke test inputs
+      - name: 📋 Log smoke test configuration
         run: |
           echo "=========================================="
           echo "🔬 Smoke Test Configuration"
@@ -70,10 +86,10 @@ jobs:
           echo "Docker compose file: ${{ inputs.docker_compose_file }}"
           echo "Working directory: ${{ inputs.working_directory || 'repository root' }}"
           echo "Expected services: ${{ inputs.expected_services || 'auto-discover' }}"
-          echo "Healthcheck URLs: ${{ inputs.healthcheck_urls }}"
+          echo "Healthcheck endpoints: ${{ inputs.healthcheck_endpoints }}"
           echo "Migration service: ${{ inputs.migration_service || 'none' }}"
-          echo "Max retries: ${{ inputs.max_retries }}"
-          echo "Retry delay: ${{ inputs.retry_delay_seconds }}s"
+          echo "Pull code: ${{ inputs.pull_code }}"
+          echo "Smoke project: $SMOKE_PROJECT"
           echo "=========================================="
 
       - name: 🔧 Set working directory
@@ -93,6 +109,31 @@ jobs:
           fi
           echo "✅ Working directory verified: $WORKDIR"
 
+      - name: 📥 Pull latest code
+        if: inputs.pull_code
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          echo "📥 Pulling latest changes..."
+
+          # Configure PAT if provided
+          REMOTE_URL=$(git config --get remote.origin.url)
+          if [[ "$REMOTE_URL" == https://* ]] && [ -n "${{ secrets.PAT_GITHUB }}" ]; then
+            REPO_PATH=$(echo "$REMOTE_URL" | sed 's|https://github.com/||')
+            git remote set-url origin "https://x-access-token:${{ secrets.PAT_GITHUB }}@github.com/$REPO_PATH"
+          fi
+
+          git fetch origin
+          git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
+
+          echo "✅ Now at commit: $(git rev-parse --short HEAD)"
+          echo "   $(git log -1 --pretty=%B | head -1)"
+
+          # Clean up credentials
+          if [[ "$(git config --get remote.origin.url)" == *"x-access-token"* ]]; then
+            REPO_PATH=$(echo "$(git config --get remote.origin.url)" | sed 's|https://x-access-token:.*@github.com/||')
+            git remote set-url origin "https://github.com/$REPO_PATH"
+          fi
+
       - name: 🔍 Verify docker compose file
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
@@ -103,41 +144,80 @@ jobs:
           fi
           echo "✅ Docker compose file exists: $COMPOSE_FILE"
 
+      - name: 📋 Copy env file for smoke containers
+        if: inputs.env_file_source != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          SRC="${{ inputs.env_file_source }}"
+          if [ -f "$SRC" ]; then
+            cp "$SRC" .env.smoke
+            echo "✅ Copied env file from $SRC to .env.smoke"
+          else
+            echo "⚠️  Env file not found at $SRC, skipping"
+          fi
+
+      - name: 🔧 Generate isolated smoke compose config
+        id: generate
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🔧 Generating isolated compose config..."
+
+          # Fetch the helper script from the workflows repo
+          SCRIPT_URL="https://raw.githubusercontent.com/922-Studio/workflows/main/.github/scripts/generate_smoke_compose.py"
+          curl -fsSL "$SCRIPT_URL" -o /tmp/generate_smoke_compose.py
+
+          python3 /tmp/generate_smoke_compose.py \
+            --compose-file "${{ inputs.docker_compose_file }}" \
+            --output smoke-compose.json \
+            --project "$SMOKE_PROJECT"
+
+          echo "smoke_compose=smoke-compose.json" >> $GITHUB_OUTPUT
+
       - name: 🐳 Discover services
         id: discover
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
-
           if [ -n "${{ inputs.expected_services }}" ]; then
             SERVICES="${{ inputs.expected_services }}"
             echo "📋 Using provided service list: $SERVICES"
           else
-            SERVICES=$(docker compose -f "$COMPOSE_FILE" config --services | tr '\n' ',' | sed 's/,$//')
+            SERVICES=$(docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json config --services | tr '\n' ',' | sed 's/,$//')
             echo "📋 Auto-discovered services: $SERVICES"
           fi
 
           echo "services=$SERVICES" >> $GITHUB_OUTPUT
 
-      - name: 🏃 Check all containers are running
-        id: container_check
+      - name: 🏗️ Build smoke images
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
+          echo "🏗️ Building images for smoke test..."
+          docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json build
+          echo "✅ All images built successfully"
+
+      - name: 🚀 Start isolated smoke stack
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🚀 Starting isolated smoke stack (project: $SMOKE_PROJECT)..."
+          docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json up -d --wait --wait-timeout 120
+          echo "✅ Smoke stack started"
+          echo ""
+          echo "📊 Container status:"
+          docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json ps
+
+      - name: 🏃 Check all containers are running
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
           SERVICES="${{ steps.discover.outputs.services }}"
           FAILED=0
 
           echo "📊 Checking container status for all services..."
           echo ""
 
-          docker compose -f "$COMPOSE_FILE" ps --format "table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Health}}"
-          echo ""
-
           IFS=',' read -ra SVC_LIST <<< "$SERVICES"
           for svc in "${SVC_LIST[@]}"; do
-            svc=$(echo "$svc" | xargs)  # trim whitespace
+            svc=$(echo "$svc" | xargs)
 
-            CONTAINER_ID=$(docker compose -f "$COMPOSE_FILE" ps -q "$svc" 2>/dev/null)
+            CONTAINER_ID=$(docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json ps -q "$svc" 2>/dev/null)
 
             if [ -z "$CONTAINER_ID" ]; then
               echo "❌ $svc — no container found (not started or crashed on startup)"
@@ -168,19 +248,18 @@ jobs:
       - name: 💚 Check Docker health status
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
           SERVICES="${{ steps.discover.outputs.services }}"
           MAX_RETRIES=${{ inputs.max_retries }}
           DELAY=${{ inputs.retry_delay_seconds }}
           FAILED=0
 
-          echo "💚 Checking Docker health status for services with healthchecks..."
+          echo "💚 Checking Docker health status..."
           echo ""
 
           IFS=',' read -ra SVC_LIST <<< "$SERVICES"
           for svc in "${SVC_LIST[@]}"; do
             svc=$(echo "$svc" | xargs)
-            CONTAINER_ID=$(docker compose -f "$COMPOSE_FILE" ps -q "$svc" 2>/dev/null)
+            CONTAINER_ID=$(docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json ps -q "$svc" 2>/dev/null)
 
             if [ -z "$CONTAINER_ID" ]; then
               continue
@@ -234,7 +313,6 @@ jobs:
         if: inputs.migration_service != ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
           SVC="${{ inputs.migration_service }}"
           SUCCESS_PATTERN="${{ inputs.migration_success_pattern }}"
           FAILURE_PATTERNS="${{ inputs.migration_failure_patterns }}"
@@ -242,7 +320,7 @@ jobs:
           echo "🗃️ Checking migration status for service: $SVC"
           echo ""
 
-          LOGS=$(docker compose -f "$COMPOSE_FILE" logs --tail=200 "$SVC" 2>&1)
+          LOGS=$(docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json logs --tail=200 "$SVC" 2>&1)
 
           # Check for failure patterns first
           if echo "$LOGS" | grep -qE "$FAILURE_PATTERNS"; then
@@ -270,35 +348,46 @@ jobs:
       - name: 🌐 HTTP health endpoint checks
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          URLS='${{ inputs.healthcheck_urls }}'
+          ENDPOINTS='${{ inputs.healthcheck_endpoints }}'
           MAX_RETRIES=${{ inputs.max_retries }}
           DELAY=${{ inputs.retry_delay_seconds }}
           FAILED=0
 
-          if [ "$URLS" = "{}" ] || [ -z "$URLS" ]; then
-            echo "⏭️  No HTTP healthcheck URLs configured, skipping"
+          if [ "$ENDPOINTS" = "{}" ] || [ -z "$ENDPOINTS" ]; then
+            echo "⏭️  No HTTP healthcheck endpoints configured, skipping"
             exit 0
           fi
 
           echo "🌐 Running HTTP health endpoint checks..."
           echo ""
 
-          # Parse JSON map using Python (available on all runners)
+          # Parse JSON and resolve random ports via docker compose port
           ENTRIES=$(python3 -c "
-          import json, sys
-          urls = json.loads('$URLS')
-          for name, url in urls.items():
-              print(f'{name}|{url}')
+          import json
+          endpoints = json.loads('$ENDPOINTS')
+          for svc, spec in endpoints.items():
+              container_port, path = spec.split(':', 1)
+              print(f'{svc}|{container_port}|{path}')
           ")
 
-          while IFS='|' read -r name url; do
-            [ -z "$name" ] && continue
+          while IFS='|' read -r svc container_port path; do
+            [ -z "$svc" ] && continue
 
-            echo -n "⏳ $name ($url) — "
+            # Resolve the randomly assigned host port
+            HOST_ADDR=$(docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json port "$svc" "$container_port" 2>/dev/null)
+
+            if [ -z "$HOST_ADDR" ]; then
+              echo "❌ $svc — could not resolve host port for container port $container_port"
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
+            URL="http://$HOST_ADDR$path"
+            echo -n "⏳ $svc ($URL) — "
             attempt=1
             SUCCESS=false
             while [ "$attempt" -le "$MAX_RETRIES" ]; do
-              HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || echo "000")
+              HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$URL" 2>/dev/null || echo "000")
 
               if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 400 ]; then
                 echo "✅ HTTP $HTTP_CODE"
@@ -345,7 +434,6 @@ jobs:
         if: failure()
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          COMPOSE_FILE="${{ inputs.docker_compose_file }}"
           SERVICES="${{ steps.discover.outputs.services }}"
 
           echo "=========================================="
@@ -357,13 +445,18 @@ jobs:
             svc=$(echo "$svc" | xargs)
             echo ""
             echo "--- $svc ---"
-            docker compose -f "$COMPOSE_FILE" logs --tail=80 "$svc" 2>/dev/null || echo "⚠️  Unable to fetch logs"
+            docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json logs --tail=80 "$svc" 2>/dev/null || echo "⚠️  Unable to fetch logs"
           done
 
           echo ""
           echo "📊 Final container status:"
-          docker compose -f "$COMPOSE_FILE" ps || true
+          docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json ps || true
 
-          echo ""
-          echo "🔍 Docker system info:"
-          docker system df || true
+      - name: 🧹 Tear down smoke stack
+        if: always()
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🧹 Tearing down smoke stack..."
+          docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json down -v --remove-orphans 2>/dev/null || true
+          rm -f smoke-compose.json .env.smoke 2>/dev/null || true
+          echo "✅ Smoke stack cleaned up"

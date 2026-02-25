@@ -24,6 +24,11 @@ on:
         required: false
         type: string
         description: "Path to a boot/deploy script relative to repository_path (optional, replaces default docker compose stop/up/cleanup steps)"
+      pull_code:
+        required: false
+        type: boolean
+        default: true
+        description: "Whether to pull latest code before deploying (default: true). Set to false if a prior step (e.g. smoke-test) already pulled"
     secrets:
       PAT_GITHUB:
         required: false
@@ -43,10 +48,12 @@ jobs:
           echo "Service Name: ${{ inputs.service_name || 'ALL SERVICES' }}"
           echo "Working Directory: ${{ inputs.working_directory || 'repository root' }}"
           echo "Boot Script: ${{ inputs.boot_script || 'none (using default docker compose steps)' }}"
+          echo "Pull Code: ${{ inputs.pull_code }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
 
       - name: Configure git credentials
+        if: inputs.pull_code
         working-directory: ${{ inputs.repository_path }}
         run: |
           echo "🔐 Configuring git credentials..."
@@ -72,6 +79,7 @@ jobs:
           fi
 
       - name: Pull latest changes
+        if: inputs.pull_code
         working-directory: ${{ inputs.repository_path }}
         run: |
           echo "📥 Pulling latest changes from remote..."
@@ -88,7 +96,7 @@ jobs:
           echo "Last commit message: $(git log -1 --pretty=%B)"
 
       - name: Clean up git credentials
-        if: always()
+        if: always() && inputs.pull_code
         working-directory: ${{ inputs.repository_path }}
         run: |
           echo "🧹 Cleaning up git credentials..."
@@ -207,6 +215,11 @@ jobs:
           if [ ! -f "$SCRIPT_PATH" ]; then
             echo "❌ ERROR: Boot script not found: $SCRIPT_PATH"
             exit 1
+          fi
+
+          # Pass SKIP_PULL to boot script when pull_code is disabled
+          if [ "${{ inputs.pull_code }}" = "false" ]; then
+            export SKIP_PULL=true
           fi
 
           chmod +x "$SCRIPT_PATH"
