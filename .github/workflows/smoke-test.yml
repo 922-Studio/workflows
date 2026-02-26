@@ -156,17 +156,21 @@ jobs:
             echo "⚠️  Env file not found at $SRC, skipping"
           fi
 
+      - name: 📦 Checkout workflows repo
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: .workflows
+          token: ${{ secrets.PAT_GITHUB }}
+
       - name: 🔧 Generate isolated smoke compose config
         id: generate
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🔧 Generating isolated compose config..."
 
-          # Fetch the helper script from the workflows repo
-          SCRIPT_URL="https://raw.githubusercontent.com/922-Studio/workflows/main/.github/scripts/generate_smoke_compose.py"
-          curl -fsSL "$SCRIPT_URL" -o /tmp/generate_smoke_compose.py
-
-          python3 /tmp/generate_smoke_compose.py \
+          python3 "${{ github.workspace }}/.workflows/.github/scripts/generate_smoke_compose.py" \
             --compose-file "${{ inputs.docker_compose_file }}" \
             --output smoke-compose.json \
             --project "$SMOKE_PROJECT"
@@ -459,4 +463,5 @@ jobs:
           echo "🧹 Tearing down smoke stack..."
           docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json down -v --remove-orphans 2>/dev/null || true
           rm -f smoke-compose.json .env.smoke 2>/dev/null || true
+          rm -rf "${{ github.workspace }}/.workflows" 2>/dev/null || true
           echo "✅ Smoke stack cleaned up"
