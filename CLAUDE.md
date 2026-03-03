@@ -1,5 +1,8 @@
 # Workflows
 
+## Git Commits
+- Do NOT add `Co-Authored-By` trailers to any git commit messages
+
 Reusable GitHub Actions workflow library for 922-Studio org. All workflows use `workflow_call`.
 
 ## Layout

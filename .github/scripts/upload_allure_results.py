@@ -84,7 +84,7 @@ def generate_report(
         log(f"⚠️ Failed to generate Allure report for '{project_id}': {exc}. Continuing anyway.")
 
 
-def build_multipart_body(results_dir: Path, launch_name: str | None = None) -> tuple[bytes, str]:
+def build_multipart_body(files: List[Path], launch_name: str | None = None) -> tuple[bytes, str]:
     """Build multipart/form-data body with files[] and optional launch_name.
 
     Returns (body_bytes, content_type_header).
@@ -103,9 +103,7 @@ def build_multipart_body(results_dir: Path, launch_name: str | None = None) -> t
         parts.append(launch_name.encode("utf-8"))
 
     # Files as files[]
-    for path in sorted(results_dir.glob("*")):
-        if not path.is_file():
-            continue
+    for path in files:
         parts.append(b"--" + boundary_bytes)
         dispo = f'Content-Disposition: form-data; name="files[]"; filename="{path.name}"'.encode(
             "utf-8"
@@ -122,6 +120,33 @@ def build_multipart_body(results_dir: Path, launch_name: str | None = None) -> t
     body = b"\r\n".join(parts)
     content_type = f"multipart/form-data; boundary={boundary}"
     return body, content_type
+
+
+# Default 20 MB batch limit — stays well under typical nginx/proxy defaults
+BATCH_MAX_BYTES: int = 20 * 1024 * 1024
+
+
+def batch_files(results_dir: Path, max_bytes: int = BATCH_MAX_BYTES) -> List[List[Path]]:
+    """Split result files into batches that stay under *max_bytes* each."""
+    all_files = sorted(p for p in results_dir.glob("*") if p.is_file())
+    batches: List[List[Path]] = []
+    current_batch: List[Path] = []
+    current_size = 0
+
+    for path in all_files:
+        fsize = path.stat().st_size
+        # Always allow at least one file per batch
+        if current_batch and current_size + fsize > max_bytes:
+            batches.append(current_batch)
+            current_batch = []
+            current_size = 0
+        current_batch.append(path)
+        current_size += fsize
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
 
 
 def main() -> int:
@@ -158,28 +183,34 @@ def main() -> int:
     # Ensure project exists (best-effort)
     ensure_project(server_url, project_id, token)
 
-    # Build multipart body with files[]
-    body, content_type = build_multipart_body(results_dir, launch_name or None)
+    batches = batch_files(results_dir)
+    total_files = sum(len(b) for b in batches)
+    log(f"Found {total_files} result file(s), uploading in {len(batches)} batch(es)...")
 
     base_url = server_url.rstrip("/")
     upload_url = base_url + f"/send-results?project_id={project_id}&force_update=true"
-    headers = {"Content-Type": content_type}
-    if token:
-        headers["X-ALLURE-TOKEN"] = token
 
-    req = request.Request(upload_url, data=body, headers=headers, method="POST")
+    for idx, batch in enumerate(batches, 1):
+        body, content_type = build_multipart_body(batch, launch_name or None)
+        log(f"  Batch {idx}/{len(batches)}: {len(batch)} file(s), {len(body)} bytes")
 
-    try:
-        with request.urlopen(req, timeout=60) as resp:
-            resp_body = resp.read().decode("utf-8", errors="replace")
-            log(f"Allure upload response ({resp.status}): {resp_body}")
-    except error.HTTPError as exc:
-        err_body = exc.read().decode("utf-8", errors="replace")
-        log(f"❌ Allure upload failed ({exc.code}): {err_body}")
-        return 1
-    except Exception as exc:  # noqa: BLE001
-        log(f"❌ Allure upload failed: {exc}")
-        return 1
+        headers = {"Content-Type": content_type}
+        if token:
+            headers["X-ALLURE-TOKEN"] = token
+
+        req = request.Request(upload_url, data=body, headers=headers, method="POST")
+
+        try:
+            with request.urlopen(req, timeout=120) as resp:
+                resp_body = resp.read().decode("utf-8", errors="replace")
+                log(f"  Batch {idx} upload response ({resp.status}): {resp_body}")
+        except error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", errors="replace")
+            log(f"❌ Allure upload failed on batch {idx} ({exc.code}): {err_body}")
+            return 1
+        except Exception as exc:  # noqa: BLE001
+            log(f"❌ Allure upload failed on batch {idx}: {exc}")
+            return 1
 
     # After successful upload, trigger report generation so the UI can show it
     generate_report(base_url, project_id, launch_name or None, token)
