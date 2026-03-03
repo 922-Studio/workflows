@@ -52,6 +52,27 @@ def ensure_project(server_url: str, project_id: str, token: str | None = None) -
         log(f"⚠️ Failed to create Allure project '{project_id}': {exc}. Continuing anyway.")
 
 
+def clean_results(server_url: str, project_id: str, token: str | None = None) -> None:
+    """Remove previous results from the Allure server before uploading fresh ones.
+
+    Calls GET /clean-results?project_id=... so deleted tests don't persist
+    as stale entries in the report.
+    """
+    base = server_url.rstrip("/")
+    url = f"{base}/clean-results?project_id={project_id}"
+    headers: dict[str, str] = {}
+    if token:
+        headers["X-ALLURE-TOKEN"] = token
+
+    req = request.Request(url, headers=headers, method="GET")
+    try:
+        with request.urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            log(f"🧹 Cleaned previous results ({resp.status}): {body}")
+    except Exception as exc:  # noqa: BLE001
+        log(f"⚠️ Failed to clean previous results: {exc}. Continuing anyway.")
+
+
 def generate_report(
     server_url: str,
     project_id: str,
@@ -188,6 +209,9 @@ def main() -> int:
 
     # Ensure project exists (best-effort)
     ensure_project(server_url, project_id, token)
+
+    # Clean stale results so deleted tests don't persist in the report
+    clean_results(server_url, project_id, token)
 
     batches = batch_files(results_dir)
     total_files = sum(len(b) for b in batches)
