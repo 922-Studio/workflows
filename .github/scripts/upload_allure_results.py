@@ -122,12 +122,18 @@ def build_multipart_body(files: List[Path], launch_name: str | None = None) -> t
     return body, content_type
 
 
-# Default 20 MB batch limit — stays well under typical nginx/proxy defaults
+# Batch limits — the Allure Docker service (and its nginx proxy) can reject
+# requests with too many multipart parts *or* too large a body.
 BATCH_MAX_BYTES: int = 20 * 1024 * 1024
+BATCH_MAX_FILES: int = 100
 
 
-def batch_files(results_dir: Path, max_bytes: int = BATCH_MAX_BYTES) -> List[List[Path]]:
-    """Split result files into batches that stay under *max_bytes* each."""
+def batch_files(
+    results_dir: Path,
+    max_bytes: int = BATCH_MAX_BYTES,
+    max_files: int = BATCH_MAX_FILES,
+) -> List[List[Path]]:
+    """Split result files into batches respecting both size and file-count limits."""
     all_files = sorted(p for p in results_dir.glob("*") if p.is_file())
     batches: List[List[Path]] = []
     current_batch: List[Path] = []
@@ -135,8 +141,8 @@ def batch_files(results_dir: Path, max_bytes: int = BATCH_MAX_BYTES) -> List[Lis
 
     for path in all_files:
         fsize = path.stat().st_size
-        # Always allow at least one file per batch
-        if current_batch and current_size + fsize > max_bytes:
+        # Start a new batch when either limit would be exceeded
+        if current_batch and (current_size + fsize > max_bytes or len(current_batch) >= max_files):
             batches.append(current_batch)
             current_batch = []
             current_size = 0
