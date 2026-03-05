@@ -461,7 +461,11 @@ jobs:
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🧹 Tearing down smoke stack..."
-          docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json down -v --remove-orphans 2>/dev/null || true
+          docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json down -v --remove-orphans --rmi local 2>/dev/null || true
+
+          # Remove any dangling images left behind by the build
+          docker image prune -f --filter "label=com.docker.compose.project=$SMOKE_PROJECT" 2>/dev/null || true
+
           rm -f smoke-compose.json .env.smoke 2>/dev/null || true
           rm -rf "${{ github.workspace }}/.workflows" 2>/dev/null || true
-          echo "✅ Smoke stack cleaned up"
+          echo "✅ Smoke stack cleaned up (containers, volumes, and images removed)"

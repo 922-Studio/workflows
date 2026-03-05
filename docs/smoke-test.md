@@ -81,7 +81,7 @@ The smoke stack is fully isolated from production:
 - **Random ports**: Host ports set to `0` (OS assigns random available ports)
 - **Prefixed volumes**: Named volumes get `smoke-{id}_` prefix, never touching production data
 - **No restart policy**: Smoke containers don't restart on failure (cleaner diagnostics)
-- **Full cleanup**: `docker compose down -v --remove-orphans` runs in `always()` step
+- **Full cleanup**: `docker compose down -v --remove-orphans --rmi local` removes containers, volumes, and locally built images
 
 ## Failure diagnostics
 
@@ -128,10 +128,6 @@ smoke-test:
     repository_path: '/home/lab/MyProject'
     healthcheck_endpoints: '{"api":"8080:/health","web":"3000:/"}'
 ```
-
-## vs frontend-smoke.yml
-
-`frontend-smoke.yml` rebuilds and polls a **single production service** in-place. `smoke-test.yml` builds an **isolated parallel stack** that never touches production, checks all containers, migrations, and multiple endpoints. Use `smoke-test.yml` as a pre-deployment gate; use `frontend-smoke.yml` for post-deployment single-service verification.
 
 ## Prerequisites
 
