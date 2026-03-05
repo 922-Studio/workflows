@@ -40,6 +40,13 @@ on:
         type: string
         description: "URL to the workflow run"
 
+      # Version override
+      latest_version:
+        required: false
+        type: string
+        default: ''
+        description: "Override version string for notifications. When empty, fetches latest tag from GitHub."
+
       # Channel toggles
       enable_email:
         required: false
@@ -111,7 +118,7 @@ jobs:
           python workflow-scripts/.github/scripts/send_email.py
 
       - name: Get latest GitHub release tag
-        if: always() && inputs.enable_discord
+        if: always() && inputs.enable_discord && inputs.latest_version == ''
         id: get_version
         env:
           GH_TOKEN: ${{ secrets.PAT_GITHUB || github.token }}
@@ -137,7 +144,7 @@ jobs:
           WORKFLOW_NAME: ${{ inputs.workflow_name }}
           REPOSITORY_NAME: ${{ inputs.repository_name }}
           RUN_URL: ${{ inputs.run_url }}
-          LATEST_VERSION: ${{ steps.get_version.outputs.version }}
+          LATEST_VERSION: ${{ inputs.latest_version || steps.get_version.outputs.version }}
         run: |
           echo "💬 Discord notifications are enabled. Running Discord sender..."
           python workflow-scripts/.github/scripts/send_discord.py

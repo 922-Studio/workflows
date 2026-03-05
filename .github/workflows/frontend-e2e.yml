@@ -18,6 +18,11 @@ on:
         type: string
         default: 'npm ci'
         description: 'Command to install project + test dependencies'
+      build_command:
+        required: false
+        type: string
+        default: ''
+        description: 'Optional build command to run before E2E tests (e.g. "npm run build"). Skipped when empty.'
       e2e_command:
         required: false
         type: string
@@ -81,6 +86,7 @@ jobs:
           echo "Node version:        ${{ inputs.node_version }}"
           echo "Working directory:   ${{ inputs.working_directory }}"
           echo "Install command:     ${{ inputs.install_command }}"
+          echo "Build command:       ${{ inputs.build_command || 'none' }}"
           echo "E2E command:         ${{ inputs.e2e_command }}"
           echo "Browsers:            ${{ inputs.browsers }}"
           echo "Allure results dir:  ${{ inputs.allure_results_dir }}"
@@ -188,6 +194,17 @@ jobs:
             npx playwright install --with-deps "$browser"
           done
           echo "✅ Playwright browsers installed."
+
+      # ── Build application (optional) ────────────────────────────────────────
+      - name: Build application
+        if: inputs.build_command != ''
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        run: |
+          echo "🏗️ Running build command..."
+          echo "Command: ${{ inputs.build_command }}"
+          set -e
+          eval "${{ inputs.build_command }}"
+          echo "✅ Build completed."
 
       # ── Run E2E tests ────────────────────────────────────────────────────────
       - name: Run Playwright E2E tests
