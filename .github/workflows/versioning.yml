@@ -26,6 +26,12 @@ jobs:
     outputs:
       new_version: ${{ steps.version.outputs.new_version }}
     steps:
+      - name: 🧹 Clean stale git worktrees
+        run: |
+          if [ -d "${{ github.workspace }}" ] && [ -d "${{ github.workspace }}/.git" ]; then
+            git -C "${{ github.workspace }}" worktree prune || true
+          fi
+
       # 1. Checkout the Application Code (HomeAPI)
       # We need this to get the git history/tags of the app being deployed
       - name: Checkout Application Code
