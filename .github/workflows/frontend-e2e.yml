@@ -93,6 +93,14 @@ jobs:
           echo "Allure server:       ${{ inputs.allure_server_url }}"
           echo "Allure project id:   ${{ inputs.allure_project_id }}"
 
+      # ── Clean stale workspace files ─────────────────────────────────────────
+      # Previous runs may leave lockfiles in the workspace root, which causes
+      # Next.js Turbopack to infer the wrong project root and break standalone output.
+      - name: Clean stale workspace files
+        run: |
+          echo "Cleaning stale files from workspace root..."
+          rm -f package-lock.json package.json yarn.lock pnpm-lock.yaml bun.lockb 2>/dev/null || true
+
       # ── Checkout workflow scripts (for upload_allure_results.py) ─────────────
       - name: Checkout Workflow Scripts
         uses: actions/checkout@v4
