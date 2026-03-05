@@ -38,6 +38,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: app-code
+          token: ${{ secrets.PAT_GITHUB }}
 
       - name: Checkout Workflow Scripts
         uses: actions/checkout@v4
