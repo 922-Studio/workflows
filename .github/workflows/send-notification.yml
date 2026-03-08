@@ -39,6 +39,11 @@ on:
         required: false
         type: string
         description: "URL to the workflow run"
+      issue_url:
+        required: false
+        type: string
+        default: ''
+        description: "URL to the GitHub issue created for this failure (optional, shown in Discord embed)"
 
       # Version override
       latest_version:
@@ -145,6 +150,7 @@ jobs:
           REPOSITORY_NAME: ${{ inputs.repository_name }}
           RUN_URL: ${{ inputs.run_url }}
           LATEST_VERSION: ${{ inputs.latest_version || steps.get_version.outputs.version }}
+          ISSUE_URL: ${{ inputs.issue_url }}
         run: |
           echo "💬 Discord notifications are enabled. Running Discord sender..."
           python workflow-scripts/.github/scripts/send_discord.py
