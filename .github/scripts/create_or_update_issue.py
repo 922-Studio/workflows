@@ -146,6 +146,16 @@ def fetch_job_log(token, repo, job_id):
     return ""
 
 
+def strip_log_timestamps(log):
+    """Strip GitHub Actions log timestamp prefixes from lines.
+
+    Raw job logs look like: '2026-03-08T17:34:00.1234567Z actual content'
+    """
+    timestamp_re = re.compile(r"^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?")
+    lines = log.splitlines()
+    return "\n".join(timestamp_re.sub("", line) for line in lines)
+
+
 def parse_pytest_summary(log):
     """Parse pytest output to extract summary and relevant log portion.
 
@@ -154,6 +164,8 @@ def parse_pytest_summary(log):
     if not log:
         return None, ""
 
+    # Strip timestamps from raw CI logs
+    log = strip_log_timestamps(log)
     lines = log.splitlines()
 
     # Look for pytest summary markers
@@ -177,7 +189,7 @@ def parse_pytest_summary(log):
         # Check for any FAILED lines as fallback
         has_failed = any(failed_pattern.match(line.strip()) for line in lines)
         if not has_failed:
-            return None, log
+            return None, ""
 
     # Extract the final result line (e.g. "= 3 failed, 10 passed =")
     summary_line = None
@@ -194,6 +206,11 @@ def parse_pytest_summary(log):
         relevant = "\n".join(lines[marker_start:])
     else:
         relevant = log
+
+    # Hard cap to prevent exceeding GitHub issue body limits
+    max_chars = 30000
+    if len(relevant) > max_chars:
+        relevant = relevant[:max_chars] + "\n\n... (truncated)"
 
     return summary_line, relevant
 
