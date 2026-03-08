@@ -1,0 +1,103 @@
+# Reusable workflow: Create or Update CI Failure Issue
+#
+# Creates a GitHub issue when a CI job fails, adds a comment if one already
+# exists for the same job, and auto-closes the issue when the job passes.
+#
+# Calling workflows must have these permissions:
+#   permissions:
+#     issues: write
+#     contents: read
+
+name: Create or Update CI Failure Issue
+
+on:
+  workflow_call:
+    inputs:
+      job_name:
+        required: true
+        type: string
+        description: "Name of the failed job (e.g. 'tests', 'smoke-test')"
+      repository_name:
+        required: true
+        type: string
+        description: "Full repo name e.g. '922-Studio/HomeAPI'"
+      branch_name:
+        required: true
+        type: string
+        description: "Branch that triggered the run"
+      run_number:
+        required: true
+        type: string
+        description: "Workflow run number"
+      run_url:
+        required: true
+        type: string
+        description: "Full URL to the workflow run"
+      workflow_status:
+        required: true
+        type: string
+        description: "'failure' or 'success'"
+      error_log:
+        required: false
+        type: string
+        description: "Raw error log output (optional, can be large)"
+      triggering_actor:
+        required: false
+        type: string
+        description: "GitHub username of the pusher"
+
+    secrets:
+      PAT_GITHUB:
+        required: true
+        description: "Personal Access Token with repo and issues scope"
+
+    outputs:
+      issue_url:
+        description: "URL of the created or updated GitHub issue"
+        value: ${{ jobs.create-issue.outputs.issue_url }}
+
+jobs:
+  create-issue:
+    runs-on: self-hosted
+    outputs:
+      issue_url: ${{ steps.issue.outputs.issue_url }}
+    steps:
+      - name: Checkout Workflow Scripts
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: workflow-scripts
+          token: ${{ secrets.PAT_GITHUB || github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Create or update issue
+        id: issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_GITHUB }}
+          REPO_FULL_NAME: ${{ inputs.repository_name }}
+          JOB_NAME: ${{ inputs.job_name }}
+          BRANCH_NAME: ${{ inputs.branch_name }}
+          RUN_NUMBER: ${{ inputs.run_number }}
+          RUN_URL: ${{ inputs.run_url }}
+          WORKFLOW_STATUS: ${{ inputs.workflow_status }}
+          ERROR_LOG: ${{ inputs.error_log }}
+          TRIGGERING_ACTOR: ${{ inputs.triggering_actor }}
+        run: python workflow-scripts/.github/scripts/create_or_update_issue.py
+
+      - name: Log summary
+        if: always()
+        run: |
+          echo "==========================================="
+          echo "📋 Issue Workflow Complete"
+          echo "==========================================="
+          echo "Job:    ${{ inputs.job_name }}"
+          echo "Repo:   ${{ inputs.repository_name }}"
+          echo "Status: ${{ inputs.workflow_status }}"
+          echo "Issue:  ${{ steps.issue.outputs.issue_url }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "==========================================="
