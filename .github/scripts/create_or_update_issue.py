@@ -13,7 +13,7 @@ import os
 import sys
 import json
 import re
-from urllib import request, error
+from urllib import request, error, parse
 
 
 GITHUB_API_BASE = "https://api.github.com"
@@ -100,12 +100,12 @@ def fetch_failed_jobs(token, repo, run_id):
 def fetch_job_log(token, repo, job_id):
     """Fetch the log for a specific job via GitHub API.
 
-    Returns the raw log text (truncated to last 200 lines), or empty string on failure.
+    Returns the raw log text, or empty string on failure.
     """
     url = f"{GITHUB_API_BASE}/repos/{repo}/actions/jobs/{job_id}/logs"
     headers = {
         "Authorization": f"token {token}",
-        "Accept": "application/vnd.github+json",
+        "Accept": "application/vnd.github.v3.raw",
         "User-Agent": "922-Studio-CI-Issue-Bot/1.0",
         "X-GitHub-Api-Version": "2022-11-28",
     }
@@ -242,9 +242,10 @@ def find_open_issue(token, repo, job_name):
     Returns the issue dict if found, None otherwise.
     """
     labels = f"ci-failure,job:{job_name}"
+    encoded_labels = parse.quote(labels, safe=",:")
     url = (
         f"{GITHUB_API_BASE}/repos/{repo}/issues"
-        f"?labels={labels}&state=open&per_page=1"
+        f"?labels={encoded_labels}&state=open&per_page=1"
     )
 
     result = github_api_request(token, "GET", url)
