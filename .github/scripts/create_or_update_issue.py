@@ -156,41 +156,10 @@ def strip_log_timestamps(log):
     return "\n".join(timestamp_re.sub("", line) for line in lines)
 
 
-def extract_pytest_section(log):
-    """Extract just the pytest output from a full job log.
-
-    Job logs contain multiple steps (setup, checkout, pytest, upload, etc.)
-    separated by ##[group] markers. This extracts the pytest step content.
-
-    Returns the pytest section or the original log if not found.
-    """
-    lines = log.splitlines()
-
-    # Find the pytest step by looking for the pytest invocation
-    pytest_start = None
-    pytest_end = None
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        # pytest output starts with "=== test session starts ==="
-        if "test session starts" in stripped and "===" in stripped:
-            pytest_start = i
-        # Look for the final pytest result line
-        if pytest_start is not None and re.match(
-            r"^=+ .*\d+ (?:failed|error|passed).*=+$", stripped
-        ):
-            pytest_end = i + 1
-            break
-
-    if pytest_start is not None and pytest_end is not None:
-        return "\n".join(lines[pytest_start:pytest_end])
-
-    return log
-
-
 def parse_pytest_summary(log):
-    """Parse pytest output to extract summary and relevant log portion.
+    """Parse pytest output to extract the FAILURES section through the result line.
 
+    Extracts only: FAILURES header → tracebacks → warnings → short summary → result line.
     Returns (summary_line_or_None, relevant_log_portion).
     """
     if not log:
@@ -198,49 +167,38 @@ def parse_pytest_summary(log):
 
     # Strip timestamps from raw CI logs
     log = strip_log_timestamps(log)
+    lines = log.splitlines()
 
-    # Extract just the pytest section from full job log
-    pytest_log = extract_pytest_section(log)
-    lines = pytest_log.splitlines()
-
-    # Look for pytest summary markers
-    summary_pattern = re.compile(r"^=+ .+ =+$")
-    failed_pattern = re.compile(r"^FAILED ")
     result_line_pattern = re.compile(
         r"^=+ (?:.*\d+ (?:failed|error|passed).*)=+$"
     )
 
-    # Find the short test summary or failures section
-    marker_start = None
+    # Find the FAILURES section start
+    failures_start = None
     for i, line in enumerate(lines):
-        if summary_pattern.match(line.strip()) and any(
-            kw in line.lower()
-            for kw in ("failures", "errors", "short test summary")
-        ):
-            marker_start = i
+        stripped = line.strip()
+        if re.match(r"^=+ FAILURES =+$", stripped):
+            failures_start = i
             break
 
-    if marker_start is None:
-        # Check for any FAILED lines as fallback
-        has_failed = any(failed_pattern.match(line.strip()) for line in lines)
-        if not has_failed:
-            return None, ""
-
-    # Extract the final result line (e.g. "= 3 failed, 10 passed =")
+    # Find the final result line (e.g. "= 2 failed, 652 passed, 1 warning in 16.22s =")
+    result_end = None
     summary_line = None
-    for line in reversed(lines):
-        stripped = line.strip()
+    for i in range(len(lines) - 1, -1, -1):
+        stripped = lines[i].strip()
         if result_line_pattern.match(stripped):
             summary_line = re.sub(r"^=+\s*", "", stripped)
             summary_line = re.sub(r"\s*=+$", "", summary_line)
+            result_end = i + 1
             break
 
-    # Extract relevant portion from marker to end
-    if marker_start is not None:
-        relevant = "\n".join(lines[marker_start:])
-    else:
-        # No FAILURES marker found, include full pytest output
-        relevant = pytest_log
+    if failures_start is None and result_end is None:
+        return None, ""
+
+    # Extract from FAILURES to end of pytest output (includes warnings + short summary)
+    start = failures_start if failures_start is not None else 0
+    end = result_end if result_end is not None else len(lines)
+    relevant = "\n".join(lines[start:end])
 
     # Hard cap to prevent exceeding GitHub issue body limits
     max_chars = 30000
