@@ -41,6 +41,10 @@ on:
         required: false
         type: string
         description: "Raw error log output (optional, can be large)"
+      run_id:
+        required: false
+        type: string
+        description: "Workflow run ID — used to fetch failed job details and logs via API"
       triggering_actor:
         required: false
         type: string
@@ -86,6 +90,7 @@ jobs:
           RUN_URL: ${{ inputs.run_url }}
           WORKFLOW_STATUS: ${{ inputs.workflow_status }}
           ERROR_LOG: ${{ inputs.error_log }}
+          RUN_ID: ${{ inputs.run_id }}
           TRIGGERING_ACTOR: ${{ inputs.triggering_actor }}
         run: python workflow-scripts/.github/scripts/create_or_update_issue.py
 

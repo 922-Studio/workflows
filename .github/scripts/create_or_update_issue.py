@@ -56,6 +56,71 @@ def github_api_request(token, method, url, body=None):
         return None
 
 
+def fetch_failed_jobs(token, repo, run_id):
+    """Fetch failed jobs for a workflow run via GitHub API.
+
+    Returns list of dicts with: name, html_url, failed_step_name, failed_step_number, failed_step_url.
+    """
+    if not run_id:
+        return []
+
+    url = f"{GITHUB_API_BASE}/repos/{repo}/actions/runs/{run_id}/jobs"
+    result = github_api_request(token, "GET", url)
+    if not result or "jobs" not in result:
+        return []
+
+    failed = []
+    for job in result["jobs"]:
+        if job.get("conclusion") != "failure":
+            continue
+
+        info = {
+            "name": job["name"],
+            "html_url": job["html_url"],
+            "job_id": job["id"],
+            "failed_step_name": None,
+            "failed_step_number": None,
+            "failed_step_url": None,
+        }
+
+        for step in job.get("steps", []):
+            if step.get("conclusion") == "failure":
+                info["failed_step_name"] = step["name"]
+                info["failed_step_number"] = step["number"]
+                info["failed_step_url"] = (
+                    f"{job['html_url']}#step:{step['number']}:1"
+                )
+                break
+
+        failed.append(info)
+
+    return failed
+
+
+def fetch_job_log(token, repo, job_id):
+    """Fetch the log for a specific job via GitHub API.
+
+    Returns the raw log text (truncated to last 200 lines), or empty string on failure.
+    """
+    url = f"{GITHUB_API_BASE}/repos/{repo}/actions/jobs/{job_id}/logs"
+    headers = {
+        "Authorization": f"token {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "922-Studio-CI-Issue-Bot/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    req = request.Request(url, headers=headers, method="GET")
+
+    try:
+        with request.urlopen(req) as resp:
+            log_text = resp.read().decode("utf-8", errors="replace")
+            return log_text
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠ Could not fetch log for job {job_id}: {e}")
+        return ""
+
+
 def parse_pytest_summary(log):
     """Parse pytest output to extract summary and relevant log portion.
 
@@ -109,20 +174,11 @@ def parse_pytest_summary(log):
 
 
 def format_issue_body(
-    job_name, branch, run_number, run_url, error_log, triggering_actor
+    job_name, branch, run_number, run_url, error_log, triggering_actor,
+    failed_jobs=None,
 ):
     """Build a markdown issue body with failure context."""
     sections = []
-
-    # Parse pytest summary if error log provided
-    pytest_summary = None
-    relevant_log = error_log or ""
-    if error_log:
-        pytest_summary, relevant_log = parse_pytest_summary(error_log)
-
-    # Test count summary at top if available
-    if pytest_summary:
-        sections.append(f"**{pytest_summary}**\n")
 
     # Metadata
     sections.append(f"**Job:** `{job_name}`")
@@ -134,16 +190,48 @@ def format_issue_body(
 
     sections.append("")
 
-    # Error log section
-    if relevant_log:
-        log_lines = relevant_log.splitlines()
-        if len(log_lines) > 50:
-            sections.append(
-                "<details>\n<summary>Error Log</summary>\n\n"
-                f"```\n{relevant_log}\n```\n\n</details>"
-            )
-        else:
-            sections.append(f"```\n{relevant_log}\n```")
+    # Failed jobs detail section (auto-fetched via API)
+    if failed_jobs:
+        sections.append("## Failed Jobs\n")
+        for job in failed_jobs:
+            sections.append(f"### {job['name']}\n")
+            if job.get("failed_step_name"):
+                step_link = f"[{job['failed_step_name']}]({job['failed_step_url']})"
+                sections.append(f"**Failed step:** {step_link}")
+            sections.append(f"**Job log:** [View full log]({job['html_url']})")
+            sections.append("")
+
+            # Include pytest-relevant log if available
+            log = job.get("log", "")
+            if log:
+                pytest_summary, relevant_log = parse_pytest_summary(log)
+                if pytest_summary:
+                    sections.append(f"**Result:** `{pytest_summary}`\n")
+                if relevant_log:
+                    log_lines = relevant_log.splitlines()
+                    # Truncate very long logs
+                    if len(log_lines) > 100:
+                        relevant_log = "\n".join(log_lines[-100:])
+                    sections.append(
+                        "<details>\n<summary>Test Output</summary>\n\n"
+                        f"```\n{relevant_log}\n```\n\n</details>"
+                    )
+                sections.append("")
+
+    # Fallback: manually provided error log (legacy path)
+    elif error_log:
+        pytest_summary, relevant_log = parse_pytest_summary(error_log)
+        if pytest_summary:
+            sections.append(f"**{pytest_summary}**\n")
+        if relevant_log:
+            log_lines = relevant_log.splitlines()
+            if len(log_lines) > 50:
+                sections.append(
+                    "<details>\n<summary>Error Log</summary>\n\n"
+                    f"```\n{relevant_log}\n```\n\n</details>"
+                )
+            else:
+                sections.append(f"```\n{relevant_log}\n```")
 
     return "\n".join(sections)
 
@@ -249,6 +337,7 @@ def main():
 
     # Optional env vars
     error_log = os.getenv("ERROR_LOG", "")
+    run_id = os.getenv("RUN_ID", "")
     triggering_actor = os.getenv("TRIGGERING_ACTOR", "")
 
     # Validate required env vars
@@ -290,7 +379,20 @@ def main():
 
         sys.exit(0)
 
-    # Failure mode: create or update issue
+    # Failure mode: fetch failed job details, then create or update issue
+    failed_jobs = []
+    if run_id:
+        print(f"🔍 Fetching failed job details for run {run_id}...")
+        failed_jobs = fetch_failed_jobs(token, repo, run_id)
+        print(f"   Found {len(failed_jobs)} failed job(s)")
+
+        # Fetch logs for each failed job
+        for job in failed_jobs:
+            log = fetch_job_log(token, repo, job["job_id"])
+            job["log"] = log
+            if log:
+                print(f"   Fetched log for '{job['name']}' ({len(log)} chars)")
+
     print(f"🔍 Checking for existing ci-failure issue for job '{job_name}'...")
     existing = find_open_issue(token, repo, job_name)
 
@@ -300,7 +402,8 @@ def main():
         print(f"📋 Found existing issue #{issue_number}, adding comment...")
 
         body = format_issue_body(
-            job_name, branch, run_number, run_url, error_log, triggering_actor
+            job_name, branch, run_number, run_url, error_log, triggering_actor,
+            failed_jobs=failed_jobs,
         )
         comment_body = (
             f"## Re-failure — Run #{run_number}\n\n{body}\n\n"
@@ -325,7 +428,8 @@ def main():
         )
         labels = ["ci-failure", "automated", f"job:{job_name}"]
         body = format_issue_body(
-            job_name, branch, run_number, run_url, error_log, triggering_actor
+            job_name, branch, run_number, run_url, error_log, triggering_actor,
+            failed_jobs=failed_jobs,
         )
 
         assignee = triggering_actor if triggering_actor else None
