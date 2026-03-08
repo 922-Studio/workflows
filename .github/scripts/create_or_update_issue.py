@@ -100,25 +100,50 @@ def fetch_failed_jobs(token, repo, run_id):
 def fetch_job_log(token, repo, job_id):
     """Fetch the log for a specific job via GitHub API.
 
+    The logs endpoint returns a 302 redirect to a temporary download URL.
+    We must follow the redirect WITHOUT the Authorization header (the
+    storage backend rejects it).
+
     Returns the raw log text, or empty string on failure.
     """
     url = f"{GITHUB_API_BASE}/repos/{repo}/actions/jobs/{job_id}/logs"
     headers = {
         "Authorization": f"token {token}",
-        "Accept": "application/vnd.github.v3.raw",
+        "Accept": "application/vnd.github+json",
         "User-Agent": "922-Studio-CI-Issue-Bot/1.0",
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
     req = request.Request(url, headers=headers, method="GET")
 
+    # Build an opener that does NOT auto-follow redirects
+    class NoRedirectHandler(request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            return None
+
+    opener = request.build_opener(NoRedirectHandler)
+
     try:
-        with request.urlopen(req) as resp:
-            log_text = resp.read().decode("utf-8", errors="replace")
-            return log_text
+        opener.open(req)
+    except error.HTTPError as e:
+        if e.code in (301, 302, 303, 307):
+            # Follow the redirect without auth headers
+            download_url = e.headers.get("Location")
+            if download_url:
+                try:
+                    dl_req = request.Request(download_url, method="GET")
+                    with request.urlopen(dl_req) as resp:
+                        return resp.read().decode("utf-8", errors="replace")
+                except Exception as dl_err:  # noqa: BLE001
+                    print(f"⚠ Could not download log from redirect for job {job_id}: {dl_err}")
+                    return ""
+        print(f"⚠ Could not fetch log for job {job_id}: {e.code} {e.reason}")
+        return ""
     except Exception as e:  # noqa: BLE001
         print(f"⚠ Could not fetch log for job {job_id}: {e}")
         return ""
+
+    return ""
 
 
 def parse_pytest_summary(log):
