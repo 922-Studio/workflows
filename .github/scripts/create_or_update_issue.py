@@ -156,6 +156,38 @@ def strip_log_timestamps(log):
     return "\n".join(timestamp_re.sub("", line) for line in lines)
 
 
+def extract_pytest_section(log):
+    """Extract just the pytest output from a full job log.
+
+    Job logs contain multiple steps (setup, checkout, pytest, upload, etc.)
+    separated by ##[group] markers. This extracts the pytest step content.
+
+    Returns the pytest section or the original log if not found.
+    """
+    lines = log.splitlines()
+
+    # Find the pytest step by looking for the pytest invocation
+    pytest_start = None
+    pytest_end = None
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        # pytest output starts with "=== test session starts ==="
+        if "test session starts" in stripped and "===" in stripped:
+            pytest_start = i
+        # Look for the final pytest result line
+        if pytest_start is not None and re.match(
+            r"^=+ .*\d+ (?:failed|error|passed).*=+$", stripped
+        ):
+            pytest_end = i + 1
+            break
+
+    if pytest_start is not None and pytest_end is not None:
+        return "\n".join(lines[pytest_start:pytest_end])
+
+    return log
+
+
 def parse_pytest_summary(log):
     """Parse pytest output to extract summary and relevant log portion.
 
@@ -166,7 +198,10 @@ def parse_pytest_summary(log):
 
     # Strip timestamps from raw CI logs
     log = strip_log_timestamps(log)
-    lines = log.splitlines()
+
+    # Extract just the pytest section from full job log
+    pytest_log = extract_pytest_section(log)
+    lines = pytest_log.splitlines()
 
     # Look for pytest summary markers
     summary_pattern = re.compile(r"^=+ .+ =+$")
@@ -196,7 +231,6 @@ def parse_pytest_summary(log):
     for line in reversed(lines):
         stripped = line.strip()
         if result_line_pattern.match(stripped):
-            # Clean up the = signs
             summary_line = re.sub(r"^=+\s*", "", stripped)
             summary_line = re.sub(r"\s*=+$", "", summary_line)
             break
@@ -205,7 +239,8 @@ def parse_pytest_summary(log):
     if marker_start is not None:
         relevant = "\n".join(lines[marker_start:])
     else:
-        relevant = log
+        # No FAILURES marker found, include full pytest output
+        relevant = pytest_log
 
     # Hard cap to prevent exceeding GitHub issue body limits
     max_chars = 30000
