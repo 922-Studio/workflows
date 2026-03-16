@@ -139,7 +139,7 @@ jobs:
           echo "Allure project id: ${{ inputs.allure_project_id }}"
 
       - name: Checkout Workflow Scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: 922-Studio/workflows
           ref: main
@@ -147,7 +147,7 @@ jobs:
           token: ${{ secrets.PAT_GITHUB }}
 
       - name: Checkout Application Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # When this workflow is used via `uses: org/workflows/.github/workflows/python-tests.yml@...`,
           # this checks out the *calling* repository (your API project)
@@ -162,7 +162,7 @@ jobs:
           echo "✅ .env file copied into workspace."
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ inputs.python_version }}
 
@@ -253,7 +253,7 @@ jobs:
 
       - name: Upload coverage and allure results as artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-results
           path: |

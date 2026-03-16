@@ -104,7 +104,7 @@ jobs:
 
       # ── Checkout workflow scripts (for upload_allure_results.py) ─────────────
       - name: Checkout Workflow Scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: 922-Studio/workflows
           ref: main
@@ -112,7 +112,7 @@ jobs:
           token: ${{ secrets.PAT_GITHUB }}
 
       - name: Checkout Application Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           # When this workflow is used via `uses: org/workflows/.github/workflows/frontend-tests.yml@...`,
           # this checks out the *calling* repository (your frontend project)
@@ -137,7 +137,7 @@ jobs:
           fi
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: ${{ inputs.node_version }}
 
@@ -269,7 +269,7 @@ jobs:
 
       - name: Upload test artifacts (if present)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: frontend-test-results
           path: |

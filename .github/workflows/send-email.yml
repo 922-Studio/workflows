@@ -49,7 +49,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout Workflow Scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: 922-Studio/workflows
           ref: main
@@ -57,7 +57,7 @@ jobs:
           token: ${{ secrets.PAT_GITHUB }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 

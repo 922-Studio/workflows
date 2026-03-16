@@ -35,13 +35,13 @@ jobs:
       # 1. Checkout the Application Code (HomeAPI)
       # We need this to get the git history/tags of the app being deployed
       - name: Checkout Application Code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: app-code
           token: ${{ secrets.PAT_GITHUB }}
 
       - name: Checkout Workflow Scripts
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: 922-Studio/workflows
           ref: main
@@ -49,7 +49,7 @@ jobs:
           token: ${{ secrets.PAT_GITHUB }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
@@ -140,15 +140,37 @@ jobs:
         working-directory: ./app-code
         run: |
           echo "📤 Committing and pushing version file..."
+          NEW_VERSION="${{ steps.version.outputs.new_version }}"
+
           git add version.txt
           if git diff --cached --quiet; then
             echo "ℹ️ No changes to version file. Skipping commit."
-          else
-            git commit -m "chore: Update version to ${{ steps.version.outputs.new_version }} [ci skip]"
-            git pull --rebase
-            git push
-            echo "✅ Version file committed and pushed."
+            exit 0
           fi
+
+          git commit -m "chore: Update version to $NEW_VERSION [ci skip]"
+
+          # Retry loop: push, and if remote moved, rebase with conflict resolution
+          MAX_RETRIES=3
+          for attempt in $(seq 1 $MAX_RETRIES); do
+            if git push; then
+              echo "✅ Version file committed and pushed."
+              exit 0
+            fi
+
+            echo "⚠️  Push failed (attempt $attempt/$MAX_RETRIES), rebasing on remote..."
+            if git pull --rebase; then
+              echo "✅ Rebase succeeded cleanly"
+            else
+              echo "🔧 Rebase conflict in version.txt — resolving with $NEW_VERSION"
+              echo "$NEW_VERSION" > version.txt
+              git add version.txt
+              GIT_EDITOR=true git rebase --continue
+            fi
+          done
+
+          echo "❌ Failed to push after $MAX_RETRIES attempts"
+          exit 1
 
       - name: Create and push tag
         if: steps.version.outputs.new_version != ''
