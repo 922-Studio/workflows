@@ -282,7 +282,7 @@ jobs:
       # ── Preserve Playwright artifacts on failure ─────────────────────────────
       - name: Upload Playwright traces & screenshots (on failure)
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: playwright-artifacts
           path: ${{ steps.paths.outputs.app_dir }}/test-results/
@@ -292,7 +292,7 @@ jobs:
       # ── Archive raw allure results ────────────────────────────────────────────
       - name: Upload Allure results as artifact (backup)
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: allure-e2e-results
           path: ${{ steps.paths.outputs.app_dir }}/${{ inputs.allure_results_dir }}/
