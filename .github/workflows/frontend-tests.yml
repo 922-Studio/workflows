@@ -249,16 +249,20 @@ jobs:
           pushgateway_url = os.environ.get("PUSHGATEWAY_URL", "").strip()
           project_id = os.environ.get("PROJECT_ID", "unknown")
           if pushgateway_url:
-              metric = f'test_coverage_percentage{{project="{project_id}"}} {pct}\n'
+              metric = (
+                  f'# HELP test_coverage_percentage Test line coverage percentage\n'
+                  f'# TYPE test_coverage_percentage gauge\n'
+                  f'test_coverage_percentage{{project="{project_id}"}} {pct}\n'
+              )
               url = f"{pushgateway_url}/metrics/job/test_coverage/project/{project_id}"
               result = subprocess.run(
-                  ["curl", "-s", "--max-time", "10", "--data-binary", metric, url],
+                  ["curl", "-sf", "--max-time", "10", "--data-binary", metric, url],
                   capture_output=True, text=True
               )
               if result.returncode == 0:
                   print(f"✅ Coverage pushed to Pushgateway ({project_id}={pct}%)")
               else:
-                  print(f"⚠️  Pushgateway unreachable — skipping. ({result.stderr.strip()})")
+                  print(f"⚠️  Pushgateway push failed — {result.stderr.strip() or result.stdout.strip()}")
           PY
 
       - name: Run frontend build (optional)
