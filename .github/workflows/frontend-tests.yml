@@ -63,6 +63,16 @@ on:
         type: string
         default: ''
         description: 'Optional launch name/label for this test run'
+      coverage_fail_under:
+        required: false
+        type: number
+        default: 0
+        description: 'Minimum required line coverage percentage (0 = disabled)'
+      pushgateway_url:
+        required: false
+        type: string
+        default: ''
+        description: 'Prometheus Pushgateway base URL for pushing coverage metrics (empty = skip)'
       env_file_source:
         required: false
         type: string
@@ -101,6 +111,8 @@ jobs:
           echo "Allure results dir: ${{ inputs.allure_results_dir }}"
           echo "Allure server: ${{ inputs.allure_server_url }}"
           echo "Allure project id: ${{ inputs.allure_project_id }}"
+          echo "Coverage fail under: ${{ inputs.coverage_fail_under }}"
+          echo "Pushgateway URL: ${{ inputs.pushgateway_url }}"
 
       # ── Checkout workflow scripts (for upload_allure_results.py) ─────────────
       - name: Checkout Workflow Scripts
@@ -203,6 +215,52 @@ jobs:
           eval "${{ inputs.test_command }}"
           echo "✅ Frontend tests completed."
 
+      - name: 📊 Check coverage threshold and push to Prometheus Pushgateway
+        if: always() && steps.run_tests.outcome == 'success'
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        env:
+          COVERAGE_FAIL_UNDER: ${{ inputs.coverage_fail_under }}
+          PUSHGATEWAY_URL: ${{ inputs.pushgateway_url }}
+          PROJECT_ID: ${{ inputs.allure_project_id }}
+        run: |
+          python3 << 'PY'
+          import os, sys, subprocess
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          path = Path("reports/cobertura-coverage.xml")
+          if not path.exists():
+              print("⚠️  No coverage XML found at reports/cobertura-coverage.xml — skipping.")
+              sys.exit(0)
+
+          root = ET.parse(path).getroot()
+          pct = round(float(root.get("line-rate", 0)) * 100, 2)
+          print(f"📊 Line coverage: {pct}%")
+
+          # Threshold check
+          fail_under = float(os.environ.get("COVERAGE_FAIL_UNDER", "0"))
+          if fail_under > 0 and pct < fail_under:
+              print(f"❌ Coverage {pct}% is below minimum {fail_under}%", file=sys.stderr)
+              sys.exit(1)
+          elif fail_under > 0:
+              print(f"✅ Coverage {pct}% meets minimum {fail_under}%")
+
+          # Push to Prometheus Pushgateway
+          pushgateway_url = os.environ.get("PUSHGATEWAY_URL", "").strip()
+          project_id = os.environ.get("PROJECT_ID", "unknown")
+          if pushgateway_url:
+              metric = f'test_coverage_percentage{{project="{project_id}"}} {pct}\n'
+              url = f"{pushgateway_url}/metrics/job/test_coverage/project/{project_id}"
+              result = subprocess.run(
+                  ["curl", "-s", "--max-time", "10", "--data-binary", metric, url],
+                  capture_output=True, text=True
+              )
+              if result.returncode == 0:
+                  print(f"✅ Coverage pushed to Pushgateway ({project_id}={pct}%)")
+              else:
+                  print(f"⚠️  Pushgateway unreachable — skipping. ({result.stderr.strip()})")
+          PY
+
       - name: Run frontend build (optional)
         if: inputs.run_build
         working-directory: ${{ steps.paths.outputs.app_dir }}
@@ -274,5 +332,6 @@ jobs:
           name: frontend-test-results
           path: |
             ${{ steps.paths.outputs.app_dir }}/reports/junit.xml
+            ${{ steps.paths.outputs.app_dir }}/reports/cobertura-coverage.xml
             ${{ steps.paths.outputs.app_dir }}/${{ inputs.allure_results_dir }}
           if-no-files-found: ignore
