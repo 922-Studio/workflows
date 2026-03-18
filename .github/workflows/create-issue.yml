@@ -1,14 +1,14 @@
-# Reusable workflow: Create or Update CI Failure Issue
+# Reusable workflow: Create CI Failure Issue
 #
-# Creates a GitHub issue when a CI job fails, adds a comment if one already
-# exists for the same job, and auto-closes the issue when the job passes.
+# Creates a new GitHub issue for every CI job failure (one issue per run),
+# and auto-closes the most recent open issue for the same job when it passes.
 #
 # Calling workflows must have these permissions:
 #   permissions:
 #     issues: write
 #     contents: read
 
-name: Create or Update CI Failure Issue
+name: Create CI Failure Issue
 
 on:
   workflow_call:
@@ -79,7 +79,7 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Create or update issue
+      - name: Create issue
         id: issue
         env:
           GITHUB_TOKEN: ${{ secrets.PAT_GITHUB }}

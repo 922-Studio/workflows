@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Create, update, or auto-close GitHub issues for CI failures.
+Create GitHub issues for CI failures, or auto-close them on success.
 
 Operates in two modes based on WORKFLOW_STATUS:
-  - failure: Create a new issue or add a comment to an existing one
+  - failure: Always create a new issue (one issue per run)
   - success: Auto-close any open ci-failure issue for the same job
 
 Uses only stdlib — no external dependencies.
@@ -429,56 +429,30 @@ def main():
             if log:
                 print(f"   Fetched log for '{job['name']}' ({len(log)} chars)")
 
-    print(f"🔍 Checking for existing ci-failure issue for job '{job_name}'...")
-    existing = find_open_issue(token, repo, job_name)
+    # Always create a new issue per failure run
+    print(f"📝 Creating new ci-failure issue for run #{run_number}...")
 
-    if existing:
-        # Add comment to existing issue
-        issue_number = existing["number"]
-        print(f"📋 Found existing issue #{issue_number}, adding comment...")
+    title = (
+        f"CI Failure: {job_name} failed on {branch}"
+        f" — {repo_short} #{run_number}"
+    )
+    labels = ["ci-failure", "automated", f"job:{job_name}"]
+    body = format_issue_body(
+        job_name, branch, run_number, run_url, error_log, triggering_actor,
+        failed_jobs=failed_jobs,
+    )
 
-        body = format_issue_body(
-            job_name, branch, run_number, run_url, error_log, triggering_actor,
-            failed_jobs=failed_jobs,
-        )
-        comment_body = (
-            f"## Re-failure — Run #{run_number}\n\n{body}\n\n"
-            f"[View run]({run_url})"
-        )
-        success = add_comment(token, repo, issue_number, comment_body)
+    assignee = triggering_actor if triggering_actor else None
+    result = create_issue(token, repo, title, body, labels, assignee)
 
-        if success:
-            issue_url = existing["html_url"]
-            print(f"✅ Comment added to issue #{issue_number}: {issue_url}")
-            set_output("issue_url", issue_url)
-        else:
-            print(f"❌ Failed to add comment to issue #{issue_number}")
-            sys.exit(1)
+    if result:
+        issue_url = result.get("html_url", "")
+        issue_number = result.get("number", "?")
+        print(f"✅ Issue #{issue_number} created: {issue_url}")
+        set_output("issue_url", issue_url)
     else:
-        # Create new issue
-        print(f"📝 Creating new ci-failure issue...")
-
-        title = (
-            f"CI Failure: {job_name} failed on {branch}"
-            f" — {repo_short} #{run_number}"
-        )
-        labels = ["ci-failure", "automated", f"job:{job_name}"]
-        body = format_issue_body(
-            job_name, branch, run_number, run_url, error_log, triggering_actor,
-            failed_jobs=failed_jobs,
-        )
-
-        assignee = triggering_actor if triggering_actor else None
-        result = create_issue(token, repo, title, body, labels, assignee)
-
-        if result:
-            issue_url = result.get("html_url", "")
-            issue_number = result.get("number", "?")
-            print(f"✅ Issue #{issue_number} created: {issue_url}")
-            set_output("issue_url", issue_url)
-        else:
-            print("❌ Failed to create issue")
-            sys.exit(1)
+        print("❌ Failed to create issue")
+        sys.exit(1)
 
     sys.exit(0)
 
