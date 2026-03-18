@@ -79,8 +79,8 @@ def build_discord_embed(workflow_status, workflow_name, repository_name, run_url
     if issue_url:
         embed["fields"].append({
             "name": "GitHub Issue",
-            "value": f"[View Issue]({issue_url})",
-            "inline": True,
+            "value": f"[View Issue]({issue_url})\n`{issue_url}`",
+            "inline": False,
         })
 
     if run_url:
