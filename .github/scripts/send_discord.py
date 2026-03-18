@@ -79,8 +79,8 @@ def build_discord_embed(workflow_status, workflow_name, repository_name, run_url
     if issue_url:
         embed["fields"].append({
             "name": "GitHub Issue",
-            "value": f"[View Issue]({issue_url})\n`{issue_url}`",
-            "inline": False,
+            "value": f"[View Issue]({issue_url})",
+            "inline": True,
         })
 
     if run_url:
@@ -105,8 +105,10 @@ def send_discord_status_update(
     """
     embed = build_discord_embed(workflow_status, workflow_name, repository_name, run_url, latest_version, issue_url=issue_url)
 
+    content = f"```\n{issue_url}\n```" if issue_url else ""
+
     payload: dict = {
-        "content": "",
+        "content": content,
         "embeds": [embed],
     }
 
