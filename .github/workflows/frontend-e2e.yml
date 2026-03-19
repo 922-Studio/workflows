@@ -58,6 +58,11 @@ on:
         type: string
         default: ''
         description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
+      runner:
+        required: false
+        type: string
+        default: '["self-hosted"]'
+        description: 'JSON array of runner labels (e.g. "[\"self-hosted\",\"e2e\"]" to target the dedicated E2E runner)'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -74,7 +79,7 @@ on:
 
 jobs:
   e2e:
-    runs-on: self-hosted
+    runs-on: ${{ fromJSON(inputs.runner) }}
 
     outputs:
       failed_tests: ${{ steps.test_summary.outputs.failed_tests }}
