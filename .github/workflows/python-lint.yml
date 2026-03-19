@@ -1,0 +1,59 @@
+name: Python Lint (ruff + mypy)
+
+on:
+  workflow_call:
+    inputs:
+      python_version:
+        required: false
+        type: string
+        default: '3.13'
+        description: 'Python version to use'
+      source_directory:
+        required: false
+        type: string
+        default: 'app/'
+        description: 'Directory to lint (passed to ruff and mypy)'
+      install_command:
+        required: false
+        type: string
+        default: 'pip install ruff mypy -q'
+        description: 'Command to install linting dependencies (e.g. include requirements.txt for mypy type stubs)'
+      ruff_format_check:
+        required: false
+        type: boolean
+        default: true
+        description: 'Run ruff format --check in addition to ruff check'
+      mypy_args:
+        required: false
+        type: string
+        default: '--ignore-missing-imports'
+        description: 'Extra arguments to pass to mypy'
+      runs_on:
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+        description: 'Runner label'
+
+jobs:
+  lint:
+    name: Lint (ruff + mypy)
+    runs-on: ${{ inputs.runs_on }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install dependencies
+        run: ${{ inputs.install_command }}
+
+      - name: Ruff check
+        run: ruff check ${{ inputs.source_directory }}
+
+      - name: Ruff format check
+        if: ${{ inputs.ruff_format_check }}
+        run: ruff format --check ${{ inputs.source_directory }}
+
+      - name: Mypy
+        run: mypy ${{ inputs.source_directory }} ${{ inputs.mypy_args }}
