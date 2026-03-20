@@ -58,6 +58,16 @@ on:
         type: string
         default: ''
         description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
+      coverage_fail_under:
+        required: false
+        type: number
+        default: 0
+        description: 'Minimum required line coverage percentage (0 = disabled). Requires reports/cobertura-coverage.xml from Playwright.'
+      pushgateway_url:
+        required: false
+        type: string
+        default: ''
+        description: 'Prometheus Pushgateway base URL for pushing coverage metrics (empty = skip)'
       runner:
         required: false
         type: string
@@ -97,6 +107,8 @@ jobs:
           echo "Allure results dir:  ${{ inputs.allure_results_dir }}"
           echo "Allure server:       ${{ inputs.allure_server_url }}"
           echo "Allure project id:   ${{ inputs.allure_project_id }}"
+          echo "Coverage threshold:  ${{ inputs.coverage_fail_under }}"
+          echo "Pushgateway URL:     ${{ inputs.pushgateway_url || 'none' }}"
 
       # ── Clean stale workspace files ─────────────────────────────────────────
       # Previous runs may leave lockfiles in the workspace root, which causes
@@ -283,6 +295,131 @@ jobs:
           set -e
           echo "🚀 Uploading Allure E2E results to server..."
           python3 workflow-scripts/.github/scripts/upload_allure_results.py
+
+      # ── Check coverage threshold and push to Pushgateway ────────────────────
+      - name: "\U0001F4CA Check coverage threshold and push to Prometheus Pushgateway"
+        id: check_coverage
+        if: always() && steps.run_e2e.outcome == 'success'
+        continue-on-error: true
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        env:
+          COVERAGE_FAIL_UNDER: ${{ inputs.coverage_fail_under }}
+          PUSHGATEWAY_URL: ${{ inputs.pushgateway_url }}
+          PROJECT_ID: ${{ inputs.allure_project_id }}
+        run: |
+          python3 << 'PY'
+          import os, sys, subprocess
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          github_output = os.environ.get("GITHUB_OUTPUT", "")
+
+          def set_output(key, value):
+              if github_output:
+                  with open(github_output, "a") as f:
+                      f.write(f"{key}={value}\n")
+
+          path = Path("reports/cobertura-coverage.xml")
+          if not path.exists():
+              print("⚠️  No coverage XML found at reports/cobertura-coverage.xml — skipping.")
+              set_output("coverage_failed", "false")
+              sys.exit(0)
+
+          root = ET.parse(path).getroot()
+          pct = round(float(root.get("line-rate", 0)) * 100, 2)
+          print(f"📊 Line coverage: {pct}%")
+          set_output("coverage_pct", str(pct))
+
+          # Threshold check — warn but do NOT block the pipeline
+          fail_under = float(os.environ.get("COVERAGE_FAIL_UNDER", "0"))
+          if fail_under > 0 and pct < fail_under:
+              print(f"⚠️  Coverage {pct}% is below minimum {fail_under}% — a notification will be sent.")
+              set_output("coverage_failed", "true")
+          elif fail_under > 0:
+              print(f"✅ Coverage {pct}% meets minimum {fail_under}%")
+              set_output("coverage_failed", "false")
+          else:
+              set_output("coverage_failed", "false")
+
+          # Push to Prometheus Pushgateway
+          pushgateway_url = os.environ.get("PUSHGATEWAY_URL", "").strip()
+          project_id = os.environ.get("PROJECT_ID", "unknown")
+          if pushgateway_url:
+              metric = (
+                  f'# HELP test_coverage_percentage Test line coverage percentage\n'
+                  f'# TYPE test_coverage_percentage gauge\n'
+                  f'test_coverage_percentage{{project="{project_id}"}} {pct}\n'
+              )
+              url = f"{pushgateway_url}/metrics/job/test_coverage/project/{project_id}"
+              result = subprocess.run(
+                  ["curl", "-sf", "--max-time", "10", "--data-binary", metric, url],
+                  capture_output=True, text=True
+              )
+              if result.returncode == 0:
+                  print(f"✅ Coverage pushed to Pushgateway ({project_id}={pct}%)")
+              else:
+                  print(f"⚠️  Pushgateway push failed — {result.stderr.strip() or result.stdout.strip()}")
+          PY
+
+      - name: "\U0001F514 Notify coverage below threshold"
+        if: always() && steps.check_coverage.outputs.coverage_failed == 'true'
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          COVERAGE_PCT: ${{ steps.check_coverage.outputs.coverage_pct }}
+          COVERAGE_THRESHOLD: ${{ inputs.coverage_fail_under }}
+          PROJECT_ID: ${{ inputs.allure_project_id }}
+          REPOSITORY_NAME: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 << 'PY'
+          import os, json, urllib.request
+
+          token = os.environ.get("DISCORD_BOT_TOKEN", "").strip()
+          if not token:
+              print("⚠️  DISCORD_BOT_TOKEN not set — skipping Discord notification.")
+              exit(0)
+
+          channel_id = "1465354445113000032"
+          pct = os.environ.get("COVERAGE_PCT", "?")
+          threshold = os.environ.get("COVERAGE_THRESHOLD", "?")
+          project = os.environ.get("PROJECT_ID", "unknown")
+          repo = os.environ.get("REPOSITORY_NAME", "")
+          run_url = os.environ.get("RUN_URL", "")
+
+          embed = {
+              "title": f"⚠️ E2E Coverage below threshold — {project}",
+              "description": (
+                  f"Line coverage **{pct}%** is below the required **{threshold}%**.\n\n"
+                  f"Deployment continues — fix coverage to silence this warning."
+              ),
+              "color": 0xFFA500,
+              "fields": [
+                  {"name": "Project", "value": project, "inline": True},
+                  {"name": "Coverage", "value": f"{pct}%", "inline": True},
+                  {"name": "Threshold", "value": f"{threshold}%", "inline": True},
+                  {"name": "Repository", "value": repo, "inline": False},
+              ],
+              "url": run_url,
+          }
+
+          payload = json.dumps({"embeds": [embed]}).encode()
+          req = urllib.request.Request(
+              f"https://discord.com/api/v10/channels/{channel_id}/messages",
+              data=payload,
+              headers={
+                  "Authorization": f"Bot {token}",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  print(f"✅ Discord coverage warning sent (HTTP {resp.status})")
+          except urllib.error.HTTPError as e:
+              print(f"⚠️  Discord notification failed: HTTP {e.code} — {e.read().decode()}")
+          except Exception as e:
+              print(f"⚠️  Discord notification failed: {e}")
+          PY
 
       # ── Preserve Playwright artifacts on failure ─────────────────────────────
       - name: Upload Playwright traces & screenshots (on failure)
