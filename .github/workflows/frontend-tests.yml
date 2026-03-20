@@ -158,7 +158,9 @@ jobs:
         run: |
           CACHE_BASE="/home/lab/runner-cache/node-modules"
           mkdir -p "$CACHE_BASE"
-          HASH=$(sha256sum "${{ steps.paths.outputs.app_dir }}/package-lock.json" | awk '{print $1}')
+          LOCKFILE="${{ steps.paths.outputs.app_dir }}/package-lock.json"
+          HASHSRC=$([ -f "$LOCKFILE" ] && echo "$LOCKFILE" || echo "${{ steps.paths.outputs.app_dir }}/package.json")
+          HASH=$(sha256sum "$HASHSRC" | awk '{print $1}')
           CACHE_PATH="$CACHE_BASE/$HASH"
           echo "cache_path=$CACHE_PATH" >> "$GITHUB_ENV"
           if [ -d "$CACHE_PATH" ]; then
