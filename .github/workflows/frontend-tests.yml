@@ -409,7 +409,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: frontend-test-results
+          name: test-results-${{ inputs.allure_project_id }}
           path: |
             ${{ steps.paths.outputs.app_dir }}/reports/junit.xml
             ${{ steps.paths.outputs.app_dir }}/reports/cobertura-coverage.xml
