@@ -1,0 +1,410 @@
+name: Generate MCP Server
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+        description: "Name for the MCP server (e.g. 'homeapi'). Used for output directory and mcporter registration."
+      api_port:
+        required: true
+        type: string
+        description: "Port the API runs on locally (e.g. '8080')"
+      openapi_path:
+        required: false
+        type: string
+        default: "/openapi.json"
+        description: "Path to the OpenAPI spec endpoint (default: /openapi.json)"
+      tag_renames:
+        required: false
+        type: string
+        default: "{}"
+        description: "JSON map of OpenAPI tag renames for Python-safe names (e.g. '{\"Activity Log\":\"activity-log\"}')"
+      mcp_base_dir:
+        required: false
+        type: string
+        default: "/home/lab/openclaw/mcp-servers"
+        description: "Base directory for MCP server output"
+      generator_dir:
+        required: false
+        type: string
+        default: "/home/lab/tools/mcp-generator"
+        description: "Path to the mcp-generator tool installation"
+      mcporter_config:
+        required: false
+        type: string
+        default: "/home/lab/openclaw/workspace/config/mcporter.json"
+        description: "Path to mcporter.json for MCP server registration"
+      auth_url:
+        required: false
+        type: string
+        default: ""
+        description: "Auth service URL for token refresh (e.g. 'http://localhost:8100'). Empty = skip auth."
+      health_timeout:
+        required: false
+        type: number
+        default: 30
+        description: "Seconds to wait for API health check before failing"
+    secrets:
+      AUTH_EMAIL:
+        required: false
+        description: "Email for auth service login (required if auth_url is set)"
+      AUTH_PASSWORD:
+        required: false
+        description: "Password for auth service login (required if auth_url is set)"
+
+jobs:
+  generate-mcp:
+    runs-on: self-hosted
+    steps:
+      - name: Log generation start
+        run: |
+          echo "=========================================="
+          echo "🔧 MCP Server Generation"
+          echo "=========================================="
+          echo "Service:       ${{ inputs.service_name }}"
+          echo "API Port:      ${{ inputs.api_port }}"
+          echo "OpenAPI Path:  ${{ inputs.openapi_path }}"
+          echo "Tag Renames:   ${{ inputs.tag_renames }}"
+          echo "Output Dir:    ${{ inputs.mcp_base_dir }}/${{ inputs.service_name }}"
+          echo "Generator:     ${{ inputs.generator_dir }}"
+          echo "Auth URL:      ${{ inputs.auth_url || 'none (no auth)' }}"
+          echo "Timestamp:     $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      - name: Ensure mcp-generator is installed
+        run: |
+          echo "📦 Checking mcp-generator installation..."
+          GENERATOR_DIR="${{ inputs.generator_dir }}"
+
+          if [ ! -d "$GENERATOR_DIR" ]; then
+            echo "📥 Cloning mcp-generator..."
+            mkdir -p "$(dirname "$GENERATOR_DIR")"
+            git clone https://github.com/quotentiroler/mcp-generator-3.x.git "$GENERATOR_DIR"
+          else
+            echo "📥 Updating mcp-generator..."
+            cd "$GENERATOR_DIR" && git pull --ff-only 2>/dev/null || echo "⚠️  Update skipped (local changes)"
+          fi
+
+          if [ ! -d "$GENERATOR_DIR/.venv" ]; then
+            echo "📦 Creating venv and installing dependencies..."
+            cd "$GENERATOR_DIR"
+            python3 -m venv .venv
+            source .venv/bin/activate
+            pip install -e . --quiet
+          fi
+
+          # Verify
+          cd "$GENERATOR_DIR" && source .venv/bin/activate
+          generate-mcp --help > /dev/null 2>&1 && echo "✅ mcp-generator ready" || { echo "❌ mcp-generator not functional"; exit 1; }
+
+      - name: Ensure support files exist
+        run: |
+          echo "🔧 Checking support files..."
+          GENERATOR_DIR="${{ inputs.generator_dir }}"
+
+          # api_client_httpx.py — real httpx-based API client replacing generated stubs
+          if [ ! -f "$GENERATOR_DIR/api_client_httpx.py" ]; then
+            echo "❌ Missing api_client_httpx.py in $GENERATOR_DIR"
+            echo "   This file must be placed manually once. See docs/generate-mcp.md"
+            exit 1
+          fi
+
+          # patch_api_methods.py — patches stub methods to call api_client.call_api()
+          if [ ! -f "$GENERATOR_DIR/patch_api_methods.py" ]; then
+            echo "❌ Missing patch_api_methods.py in $GENERATOR_DIR"
+            echo "   This file must be placed manually once. See docs/generate-mcp.md"
+            exit 1
+          fi
+
+          echo "✅ Support files present"
+
+      - name: Wait for API health
+        run: |
+          echo "⏳ Waiting for API at http://localhost:${{ inputs.api_port }}/health..."
+          TIMEOUT=${{ inputs.health_timeout }}
+
+          for i in $(seq 1 $TIMEOUT); do
+            if curl -sf "http://localhost:${{ inputs.api_port }}/health" > /dev/null 2>&1; then
+              echo "✅ API is healthy"
+              exit 0
+            fi
+            if [ "$i" -eq "$TIMEOUT" ]; then
+              echo "❌ API not ready after ${TIMEOUT}s"
+              exit 1
+            fi
+            sleep 1
+          done
+
+      - name: Fetch and normalize OpenAPI spec
+        run: |
+          echo "📥 Fetching OpenAPI spec..."
+          API_URL="http://localhost:${{ inputs.api_port }}${{ inputs.openapi_path }}"
+          curl -sf "$API_URL" -o /tmp/openapi-raw.json
+
+          SPEC_SIZE=$(wc -c < /tmp/openapi-raw.json)
+          echo "  Spec fetched: ${SPEC_SIZE} bytes"
+
+          echo "🔧 Normalizing tags..."
+          python3 - << 'PYSCRIPT'
+          import json
+
+          with open("/tmp/openapi-raw.json") as f:
+              spec = json.load(f)
+
+          tag_renames = json.loads('${{ inputs.tag_renames }}')
+
+          if tag_renames:
+              for path_item in spec.get("paths", {}).values():
+                  for op in path_item.values():
+                      if isinstance(op, dict) and "tags" in op:
+                          op["tags"] = [tag_renames.get(t, t) for t in op["tags"]]
+              if "tags" in spec:
+                  for tag in spec["tags"]:
+                      if tag.get("name") in tag_renames:
+                          tag["name"] = tag_renames[tag["name"]]
+              print(f"  Renamed {len(tag_renames)} tag(s)")
+
+          with open("/tmp/openapi-normalized.json", "w") as f:
+              json.dump(spec, f, indent=2)
+
+          tags = sorted(set(
+              t for p in spec.get("paths", {}).values()
+              for op in p.values()
+              if isinstance(op, dict)
+              for t in op.get("tags", [])
+          ))
+          print(f"  {len(tags)} tags: {', '.join(tags)}")
+          PYSCRIPT
+
+      - name: Generate MCP servers
+        run: |
+          echo "🏗️ Generating MCP servers..."
+          GENERATOR_DIR="${{ inputs.generator_dir }}"
+          cd "$GENERATOR_DIR"
+          source .venv/bin/activate
+
+          # Clean previous generation
+          rm -rf generated_mcp generated_openapi
+
+          generate-mcp --file /tmp/openapi-normalized.json 2>&1 | grep -E "^(✅|❌|📊|Found|⚠️)" || true
+
+          # Verify generation succeeded
+          if [ ! -f generated_mcp/*_mcp_generated.py ]; then
+            echo "❌ MCP generation failed — no entry point found"
+            exit 1
+          fi
+
+          ENTRY=$(basename generated_mcp/*_mcp_generated.py)
+          MODULE_COUNT=$(find generated_mcp/servers/ -name "*.py" ! -name "__init__.py" | wc -l)
+          echo "✅ Generated: ${MODULE_COUNT} modules, entry: ${ENTRY}"
+
+      - name: Patch API client
+        run: |
+          echo "🔧 Patching generated API client..."
+          GENERATOR_DIR="${{ inputs.generator_dir }}"
+
+          # Replace stub api_client.py with httpx implementation
+          cp "$GENERATOR_DIR/api_client_httpx.py" \
+             "$GENERATOR_DIR/generated_openapi/openapi_client/api_client.py"
+          echo "  ✅ Replaced api_client.py with httpx implementation"
+
+          # Patch all API method stubs to make real HTTP calls
+          source "$GENERATOR_DIR/.venv/bin/activate"
+          python3 "$GENERATOR_DIR/patch_api_methods.py" \
+            "$GENERATOR_DIR/generated_openapi/openapi_client/api"
+
+          # Fix backend URL in middleware (generator defaults to localhost:3001)
+          sed -i "s|http://localhost:3001|http://localhost:${{ inputs.api_port }}|g" \
+            "$GENERATOR_DIR/generated_mcp/middleware/authentication.py"
+          echo "  ✅ Backend URL set to localhost:${{ inputs.api_port }}"
+
+      - name: Deploy to output directory
+        run: |
+          echo "📦 Deploying to output directory..."
+          GENERATOR_DIR="${{ inputs.generator_dir }}"
+          OUTPUT_DIR="${{ inputs.mcp_base_dir }}/${{ inputs.service_name }}"
+
+          # Ensure output dir and venv exist
+          mkdir -p "$OUTPUT_DIR"
+          if [ ! -d "$OUTPUT_DIR/.venv" ]; then
+            echo "  📦 Creating venv..."
+            python3 -m venv "$OUTPUT_DIR/.venv"
+          fi
+
+          # Backup persistent files
+          for f in .api-token mcp-config.env run.sh; do
+            cp "$OUTPUT_DIR/$f" "/tmp/mcp-backup-$f" 2>/dev/null || true
+          done
+
+          # Clean old generated files (keep .venv)
+          find "$OUTPUT_DIR" -maxdepth 1 -mindepth 1 ! -name '.venv' -exec rm -rf {} + 2>/dev/null || true
+
+          # Copy new files
+          cp -r "$GENERATOR_DIR/generated_mcp/"* "$OUTPUT_DIR/"
+          cp -r "$GENERATOR_DIR/generated_openapi" "$OUTPUT_DIR/"
+
+          # Restore persistent files
+          for f in .api-token mcp-config.env run.sh; do
+            cp "/tmp/mcp-backup-$f" "$OUTPUT_DIR/$f" 2>/dev/null || true
+          done
+
+          echo "✅ Files deployed to $OUTPUT_DIR"
+
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing dependencies..."
+          OUTPUT_DIR="${{ inputs.mcp_base_dir }}/${{ inputs.service_name }}"
+          cd "$OUTPUT_DIR"
+          source .venv/bin/activate
+
+          pip install -e . --quiet 2>&1 | tail -1
+          pip install -e generated_openapi/ --force-reinstall --no-deps --quiet 2>&1 | tail -1
+
+          echo "✅ Dependencies installed"
+
+      - name: Refresh auth token
+        if: inputs.auth_url != ''
+        run: |
+          echo "🔐 Refreshing auth token..."
+          OUTPUT_DIR="${{ inputs.mcp_base_dir }}/${{ inputs.service_name }}"
+
+          TOKEN=$(curl -sf -X POST "${{ inputs.auth_url }}/auth/login" \
+            -H "Content-Type: application/json" \
+            -d "{\"email\":\"${{ secrets.AUTH_EMAIL }}\",\"password\":\"${{ secrets.AUTH_PASSWORD }}\"}" \
+            | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])" 2>/dev/null) || true
+
+          if [ -n "$TOKEN" ]; then
+            echo "$TOKEN" > "$OUTPUT_DIR/.api-token"
+            echo "✅ Token refreshed"
+          else
+            echo "⚠️  Could not refresh token — using existing (if any)"
+          fi
+
+      - name: Create run script
+        run: |
+          echo "🔧 Creating run script..."
+          OUTPUT_DIR="${{ inputs.mcp_base_dir }}/${{ inputs.service_name }}"
+          ENTRY=$(basename "$OUTPUT_DIR"/*_mcp_generated.py)
+
+          # Only create if it doesn't exist (preserve custom changes)
+          if [ ! -f "$OUTPUT_DIR/run.sh" ]; then
+            cat > "$OUTPUT_DIR/run.sh" << RUNEOF
+          #!/bin/bash
+          # MCP server wrapper — loads token and runs via stdio
+          export BACKEND_API_TOKEN=\$(cat $OUTPUT_DIR/.api-token 2>/dev/null || echo "")
+          exec $OUTPUT_DIR/.venv/bin/python $OUTPUT_DIR/$ENTRY --transport stdio
+          RUNEOF
+            chmod +x "$OUTPUT_DIR/run.sh"
+            echo "✅ Created run.sh"
+          else
+            echo "  run.sh already exists — keeping"
+          fi
+
+      - name: Register in mcporter
+        run: |
+          echo "🔗 Registering in mcporter..."
+          MCPORTER="${{ inputs.mcporter_config }}"
+          OUTPUT_DIR="${{ inputs.mcp_base_dir }}/${{ inputs.service_name }}"
+          SERVICE="${{ inputs.service_name }}"
+
+          if [ ! -f "$MCPORTER" ]; then
+            echo "⚠️  mcporter.json not found at $MCPORTER — skipping registration"
+            exit 0
+          fi
+
+          python3 - << PYSCRIPT
+          import json
+
+          with open("$MCPORTER") as f:
+              config = json.load(f)
+
+          config.setdefault("mcpServers", {})["$SERVICE"] = {
+              "command": "bash",
+              "args": ["$OUTPUT_DIR/run.sh"],
+              "env": {}
+          }
+
+          with open("$MCPORTER", "w") as f:
+              json.dump(config, f, indent=2)
+
+          print(f"  ✅ Registered '$SERVICE' in mcporter ({len(config['mcpServers'])} servers total)")
+          PYSCRIPT
+
+      - name: Smoke test
+        run: |
+          echo "🧪 Running smoke test..."
+          OUTPUT_DIR="${{ inputs.mcp_base_dir }}/${{ inputs.service_name }}"
+          source "$OUTPUT_DIR/.venv/bin/activate"
+          export BACKEND_API_TOKEN=$(cat "$OUTPUT_DIR/.api-token" 2>/dev/null || echo "")
+          ENTRY=$(basename "$OUTPUT_DIR"/*_mcp_generated.py)
+
+          cd "$OUTPUT_DIR"
+
+          # Test: server starts and lists tools
+          python3 - << 'PYSCRIPT'
+          import asyncio, os, sys
+          from mcp import ClientSession, StdioServerParameters
+          from mcp.client.stdio import stdio_client
+
+          async def main():
+              server_params = StdioServerParameters(
+                  command=sys.executable,
+                  args=[os.environ.get("ENTRY", ""), "--transport", "stdio"],
+                  env={**os.environ},
+              )
+
+              try:
+                  async with stdio_client(server_params) as (read, write):
+                      async with ClientSession(read, write) as session:
+                          await session.initialize()
+                          tools = await session.list_tools()
+                          print(f"✅ MCP server OK — {len(tools.tools)} tools registered")
+
+                          # Group by namespace
+                          from collections import defaultdict
+                          groups = defaultdict(int)
+                          for t in tools.tools:
+                              ns = t.name.split("_")[0]
+                              groups[ns] += 1
+
+                          for ns in sorted(groups):
+                              print(f"  {ns}: {groups[ns]} tools")
+
+              except Exception as e:
+                  print(f"❌ Smoke test failed: {e}")
+                  sys.exit(1)
+
+          asyncio.run(main())
+          PYSCRIPT
+        env:
+          ENTRY: ${{ inputs.service_name }}_mcp_generated.py
+
+      - name: Log generation success
+        if: success()
+        run: |
+          OUTPUT_DIR="${{ inputs.mcp_base_dir }}/${{ inputs.service_name }}"
+          MODULE_COUNT=$(find "$OUTPUT_DIR/servers/" -name "*.py" ! -name "__init__.py" | wc -l)
+          echo "=========================================="
+          echo "✅ MCP GENERATION SUCCESSFUL"
+          echo "=========================================="
+          echo "Service:   ${{ inputs.service_name }}"
+          echo "Modules:   ${MODULE_COUNT}"
+          echo "Output:    $OUTPUT_DIR"
+          echo "mcporter:  ${{ inputs.mcporter_config }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      - name: Log generation failure
+        if: failure()
+        run: |
+          echo "=========================================="
+          echo "❌ MCP GENERATION FAILED"
+          echo "=========================================="
+          echo "Service:   ${{ inputs.service_name }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo ""
+          echo "📋 Check logs above for details."
+          echo "   The API deployment is NOT affected by this failure."
+          echo "=========================================="

@@ -27,6 +27,11 @@ Comprehensive post-deployment smoke test for Docker Compose stacks. Checks all c
 
 **Documentation**: [docs/smoke-test.md](docs/smoke-test.md)
 
+### 6. Generate MCP Server
+Automatically generates MCP (Model Context Protocol) servers from a service's OpenAPI specification. Each OpenAPI tag becomes a namespaced MCP tool group, making API endpoints available as tools for AI agents. Handles generator installation, spec normalization, API client patching, deployment, auth token refresh, and mcporter registration.
+
+**Documentation**: [docs/generate-mcp.md](docs/generate-mcp.md)
+
 ## Usage
 
 To use this workflow in your own repository, create a new workflow file (e.g., `.github/workflows/release.yml`) with the following content:
