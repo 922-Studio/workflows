@@ -346,11 +346,7 @@ def close_issue(token, repo, issue_number, run_number, run_url):
 
 
 def set_output(name, value):
-    """Set a GitHub Actions output variable (both legacy and modern format)."""
-    # Legacy format
-    print(f"::set-output name={name}::{value}")
-
-    # Modern format
+    """Set a GitHub Actions output variable."""
     github_output = os.getenv("GITHUB_OUTPUT")
     if github_output:
         try:
