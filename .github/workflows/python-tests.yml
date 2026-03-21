@@ -286,7 +286,7 @@ jobs:
           PY
 
       - name: Upload coverage and allure results as artifacts
-        if: always()
+        if: success() || failure()
         uses: actions/upload-artifact@v6
         with:
           name: test-results
@@ -295,7 +295,7 @@ jobs:
             app-code/reports/coverage.xml
 
       - name: Upload Allure results to external server
-        if: always()
+        if: success() || failure()
         env:
           # Use app-code/<dir> so the script sees the real path
           ALLURE_RESULTS_DIR: app-code/${{ inputs.allure_results_dir }}
