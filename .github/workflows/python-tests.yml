@@ -66,20 +66,23 @@ on:
         type: string
         description: 'Value for GITHUB_REPO during tests'
       google_sheet_id:
-        required: true
+        required: false
         type: string
+        default: ''
         description: 'Value for GOOGLE_SHEET_ID during tests'
       google_service_account_file:
-        required: true
+        required: false
         type: string
+        default: ''
         description: 'Value for GOOGLE_SERVICE_ACCOUNT_FILE during tests'
       database_url:
         required: true
         type: string
         description: 'Value for DATABASE_URL during tests'
       discord_bot_token:
-        required: true
+        required: false
         type: string
+        default: ''
         description: 'Value for DISCORD_BOT_TOKEN during tests'
       github_token:
         required: false
