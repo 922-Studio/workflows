@@ -76,9 +76,10 @@ on:
         default: ''
         description: 'Value for GOOGLE_SERVICE_ACCOUNT_FILE during tests'
       database_url:
-        required: true
+        required: false
         type: string
-        description: 'Value for DATABASE_URL during tests'
+        default: ''
+        description: 'Value for DATABASE_URL during tests (leave empty to use value from env_file_source)'
       discord_bot_token:
         required: false
         type: string
@@ -131,7 +132,6 @@ jobs:
       GITHUB_REPO: ${{ inputs.github_repo }}
       GOOGLE_SHEET_ID: ${{ inputs.google_sheet_id }}
       GOOGLE_SERVICE_ACCOUNT_FILE: ${{ inputs.google_service_account_file }}
-      DATABASE_URL: ${{ inputs.database_url }}
       DISCORD_BOT_TOKEN: ${{ inputs.discord_bot_token }}
       GITHUB_TOKEN: ${{ inputs.github_token }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -168,6 +168,10 @@ jobs:
           echo "📋 Copying .env from ${{ inputs.env_file_source }}..."
           cp "${{ inputs.env_file_source }}" app-code/.env
           echo "✅ .env file copied into workspace."
+
+      - name: Set DATABASE_URL from input
+        if: inputs.database_url != ''
+        run: echo "DATABASE_URL=${{ inputs.database_url }}" >> $GITHUB_ENV
 
       - name: Set up Python
         uses: actions/setup-python@v6
