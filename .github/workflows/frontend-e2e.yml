@@ -299,7 +299,7 @@ jobs:
       # ── Check coverage threshold and push to Pushgateway ────────────────────
       - name: "\U0001F4CA Check coverage threshold and push to Prometheus Pushgateway"
         id: check_coverage
-        if: always() && steps.run_e2e.outcome == 'success'
+        if: always() && steps.run_e2e.outcome != 'cancelled'
         continue-on-error: true
         working-directory: ${{ steps.paths.outputs.app_dir }}
         env:
