@@ -197,6 +197,7 @@ jobs:
 
       - name: Run pytest with coverage + Allure
         id: run_pytest
+        timeout-minutes: 10
         working-directory: ./app-code
         env:
           ALLURE_RESULTS_DIR: ${{ inputs.allure_results_dir }}
