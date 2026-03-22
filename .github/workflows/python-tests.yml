@@ -95,6 +95,11 @@ on:
         type: string
         default: ''
         description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
+      pushgateway_url:
+        required: false
+        type: string
+        default: ''
+        description: 'Pushgateway base URL for pushing coverage metrics (leave empty to skip)'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -282,3 +287,26 @@ jobs:
           echo "🚀 Preparing Allure results for upload (via Python helper)..."
           python3 workflow-scripts/.github/scripts/upload_allure_results.py
 
+      - name: 📊 Push coverage to Prometheus Pushgateway
+        if: inputs.pushgateway_url != '' && (success() || failure())
+        working-directory: ./app-code
+        run: |
+          COVERAGE_XML="reports/coverage.xml"
+          if [ ! -f "$COVERAGE_XML" ]; then
+            echo "⚠️  No coverage.xml found — skipping Pushgateway push."
+            exit 0
+          fi
+
+          LINE_RATE=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('$COVERAGE_XML')
+          print(tree.getroot().attrib.get('line-rate', '0'))
+          ")
+          COVERAGE_PCT=$(python3 -c "print(round(float('$LINE_RATE') * 100, 2))")
+
+          echo "📊 Coverage: ${COVERAGE_PCT}% — pushing to Pushgateway..."
+          cat <<PROM | curl -s --data-binary @- "${{ inputs.pushgateway_url }}/metrics/job/ci/project/${{ inputs.allure_project_id }}"
+          # TYPE test_coverage_percentage gauge
+          test_coverage_percentage{project="${{ inputs.allure_project_id }}"} $COVERAGE_PCT
+          PROM
+          echo "✅ Coverage metric pushed to Pushgateway."

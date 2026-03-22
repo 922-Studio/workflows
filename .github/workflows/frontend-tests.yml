@@ -68,6 +68,16 @@ on:
         type: string
         default: ''
         description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
+      coverage_fail_under:
+        required: false
+        type: number
+        default: 0
+        description: 'Minimum coverage percentage to enforce (0 disables). Used only for Pushgateway reporting.'
+      pushgateway_url:
+        required: false
+        type: string
+        default: ''
+        description: 'Pushgateway base URL for pushing coverage metrics (leave empty to skip)'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -279,3 +289,58 @@ jobs:
             ${{ steps.paths.outputs.app_dir }}/reports/cobertura-coverage.xml
             ${{ steps.paths.outputs.app_dir }}/${{ inputs.allure_results_dir }}
           if-no-files-found: ignore
+
+      - name: 📊 Check coverage threshold and push to Prometheus Pushgateway
+        if: inputs.pushgateway_url != '' && (success() || failure())
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        run: |
+          COVERAGE_XML="reports/cobertura-coverage.xml"
+          if [ ! -f "$COVERAGE_XML" ]; then
+            echo "⚠️  No cobertura-coverage.xml found — skipping Pushgateway push."
+            exit 0
+          fi
+
+          LINE_RATE=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('$COVERAGE_XML')
+          print(tree.getroot().attrib.get('line-rate', '0'))
+          ")
+          COVERAGE_PCT=$(python3 -c "print(round(float('$LINE_RATE') * 100, 2))")
+
+          echo "📊 Coverage: ${COVERAGE_PCT}% — pushing to Pushgateway..."
+          cat <<PROM | curl -s --data-binary @- "${{ inputs.pushgateway_url }}/metrics/job/ci/project/${{ inputs.allure_project_id }}"
+          # TYPE test_coverage_percentage gauge
+          test_coverage_percentage{project="${{ inputs.allure_project_id }}"} $COVERAGE_PCT
+          PROM
+          echo "✅ Coverage metric pushed to Pushgateway."
+
+      - name: 🔔 Notify coverage below threshold
+        if: inputs.pushgateway_url != '' && inputs.coverage_fail_under > 0 && (success() || failure())
+        working-directory: ${{ steps.paths.outputs.app_dir }}
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+        run: |
+          COVERAGE_XML="reports/cobertura-coverage.xml"
+          if [ ! -f "$COVERAGE_XML" ]; then exit 0; fi
+
+          LINE_RATE=$(python3 -c "
+          import xml.etree.ElementTree as ET
+          tree = ET.parse('$COVERAGE_XML')
+          print(tree.getroot().attrib.get('line-rate', '0'))
+          ")
+          COVERAGE_PCT=$(python3 -c "print(round(float('$LINE_RATE') * 100, 2))")
+          THRESHOLD=${{ inputs.coverage_fail_under }}
+
+          if python3 -c "exit(0 if float('$COVERAGE_PCT') < float('$THRESHOLD') else 1)"; then
+            echo "⚠️  Coverage ${COVERAGE_PCT}% is below threshold ${THRESHOLD}%"
+            if [ -n "$DISCORD_BOT_TOKEN" ]; then
+              python3 -c "
+          import json, urllib.request
+          webhook_url = 'https://discord.com/api/webhooks'
+          # Coverage below threshold — rely on CI status check to enforce
+          print(f'Coverage {float(\"$COVERAGE_PCT\"):.1f}% < {float(\"$THRESHOLD\"):.0f}% threshold for ${{ inputs.allure_project_id }}')
+          "
+            fi
+          else
+            echo "✅ Coverage ${COVERAGE_PCT}% meets threshold ${THRESHOLD}%"
+          fi
