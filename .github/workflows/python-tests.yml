@@ -95,11 +95,6 @@ on:
         type: string
         default: ''
         description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
-      pushgateway_url:
-        required: false
-        type: string
-        default: ''
-        description: 'Prometheus Pushgateway URL to push coverage after a successful run (e.g. http://home-lab:9091). Leave empty to skip.'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -225,35 +220,6 @@ jobs:
             ${{ inputs.pytest_args }}
 
           echo "✅ Pytest run completed."
-
-      - name: 📊 Push coverage to Prometheus Pushgateway
-        # Only runs when pushgateway_url is set and tests passed (success()).
-        # Parses line-rate from coverage.xml (0.0–1.0 float) and converts to percentage.
-        # Pushed metric: test_coverage_percentage{project="<allure_project_id>"} <value>
-        # Values persist in Pushgateway until overwritten by the next successful CI run.
-        if: inputs.pushgateway_url != '' && success()
-        working-directory: ./app-code
-        env:
-          PUSHGATEWAY_URL: ${{ inputs.pushgateway_url }}
-          PROJECT_ID: ${{ inputs.allure_project_id }}
-        run: |
-          COVERAGE_PCT=$(python3 - << 'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-          path = Path("reports/coverage.xml")
-          if path.exists():
-              root = ET.parse(path).getroot()
-              print(round(float(root.get("line-rate", 0)) * 100, 2))
-          else:
-              print(0)
-          PY
-          )
-          echo "📊 Coverage: ${COVERAGE_PCT}% (project: ${PROJECT_ID})"
-          printf '# HELP test_coverage_percentage Test line coverage percentage\n# TYPE test_coverage_percentage gauge\ntest_coverage_percentage{project="%s"} %s\n' \
-            "$PROJECT_ID" "$COVERAGE_PCT" | \
-            curl -sf --data-binary @- "${PUSHGATEWAY_URL}/metrics/job/test_coverage/project/${PROJECT_ID}" \
-            && echo "✅ Coverage pushed to Pushgateway" \
-            || echo "⚠️ Pushgateway push failed (non-fatal)"
 
       - name: Compute pytest summary (failed/total)
         id: test_summary
