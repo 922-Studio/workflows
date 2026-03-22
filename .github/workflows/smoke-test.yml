@@ -120,10 +120,14 @@ jobs:
         run: |
           echo "📥 Pulling latest changes..."
 
-          # Configure PAT if provided
+          # Configure PAT if provided — first normalize the URL to plain https://github.com/...
           REMOTE_URL=$(git config --get remote.origin.url)
-          if [[ "$REMOTE_URL" == https://* ]] && [ -n "${{ secrets.PAT_GITHUB }}" ]; then
-            REPO_PATH=$(echo "$REMOTE_URL" | sed 's|https://github.com/||')
+          # Strip any existing PAT prefixes (handles corrupted multi-prefix URLs)
+          REPO_PATH=$(echo "$REMOTE_URL" | sed -E 's|https://(x-access-token:[^@]+@)?github\.com/||g')
+          # Restore clean URL before adding PAT
+          git remote set-url origin "https://github.com/$REPO_PATH"
+
+          if [ -n "${{ secrets.PAT_GITHUB }}" ]; then
             git remote set-url origin "https://x-access-token:${{ secrets.PAT_GITHUB }}@github.com/$REPO_PATH"
           fi
 
