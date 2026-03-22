@@ -58,6 +58,11 @@ on:
         required: false
         type: string
         description: 'Path to .env file to copy into the working directory for smoke containers (e.g. /home/lab/MyProject/.env)'
+      runner:
+        required: false
+        type: string
+        default: 'self-hosted'
+        description: 'Runner label to target (e.g. "self-hosted" or "home-lab"). Use a specific label to pin the job to the host that has the deployment directory.'
     secrets:
       PAT_GITHUB:
         required: false
@@ -69,7 +74,7 @@ on:
 
 jobs:
   smoke:
-    runs-on: self-hosted
+    runs-on: ${{ inputs.runner }}
     outputs:
       result: ${{ steps.summary.outputs.result }}
 
