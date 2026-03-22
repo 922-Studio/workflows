@@ -1,9 +1,10 @@
 """Generate an isolated Docker Compose config for smoke testing.
 
 Reads a compose file via `docker compose config --format json`, strips
-container_name directives, remaps host ports to 0 (random), and prefixes
-named volumes — so the smoke stack can run alongside production without
-conflicts.
+container_name directives, remaps host ports to 0 (random), prefixes
+named volumes, isolates external networks, and injects temporary
+database/cache services — so the smoke stack can run alongside production
+without conflicts or side effects on production data.
 
 Usage:
     python generate_smoke_compose.py \
@@ -14,8 +15,18 @@ Usage:
 
 import argparse
 import json
+import re
 import subprocess
 import sys
+from urllib.parse import urlparse
+
+# Hostnames of shared infrastructure that must be replaced with temp services
+EXTERNAL_POSTGRES_HOSTS = {"shared_postgres"}
+EXTERNAL_REDIS_HOSTS = {"shared_redis"}
+
+# Names for injected temporary services
+SMOKE_POSTGRES = "smoke-postgres"
+SMOKE_REDIS = "smoke-redis"
 
 
 def resolve_compose(compose_file: str) -> dict:
@@ -74,12 +85,118 @@ def isolate_config(config: dict, project: str) -> dict:
             new_volumes[vol_name]["name"] = new_name
         config["volumes"] = new_volumes
 
-    # Remove networks with fixed names to avoid conflicts
+    # Isolate external networks — remove 'external' flag so docker compose
+    # creates project-scoped networks instead of joining production ones.
+    # This prevents smoke containers from reaching shared_postgres, shared_redis, etc.
     networks = config.get("networks", {})
     if networks:
         for net_name, net_config in networks.items():
-            if net_config and "name" in net_config:
-                del net_config["name"]
+            if isinstance(net_config, dict):
+                net_config.pop("external", None)
+                net_config.pop("name", None)
+
+    return config
+
+
+def isolate_external_services(config: dict) -> dict:
+    """Replace references to shared infrastructure with temporary isolated services.
+
+    Scans all service environment variables for references to shared PostgreSQL
+    and Redis hosts. When found, rewrites the connection strings to point to
+    temporary services and injects those services into the compose config.
+
+    This ensures smoke tests never touch production databases — migrations run
+    against an ephemeral PostgreSQL that is destroyed after the test.
+    """
+    services = config.get("services", {})
+    networks = config.get("networks", {})
+    all_network_names = list(networks.keys())
+
+    pg_credentials: dict[str, dict[str, str]] = {}  # {db_name: {user, password}}
+    needs_redis = False
+
+    for svc_name, svc in services.items():
+        env = svc.get("environment", {})
+        for key, val in list(env.items()):
+            if not isinstance(val, str):
+                continue
+
+            # Rewrite PostgreSQL references to shared hosts
+            for ext_host in EXTERNAL_POSTGRES_HOSTS:
+                if ext_host in val:
+                    try:
+                        clean = re.sub(r"postgresql\+\w+://", "postgresql://", val)
+                        parsed = urlparse(clean)
+                        db_user = parsed.username or "smoke"
+                        db_pass = parsed.password or "smoke"
+                        db_name = (parsed.path or "/smoke").lstrip("/") or "smoke"
+                        pg_credentials[db_name] = {
+                            "user": db_user,
+                            "password": db_pass,
+                        }
+                    except Exception:
+                        pg_credentials.setdefault(
+                            "smoke", {"user": "smoke", "password": "smoke"}
+                        )
+                    env[key] = val.replace(ext_host, SMOKE_POSTGRES)
+
+            # Rewrite Redis references to shared hosts
+            for ext_host in EXTERNAL_REDIS_HOSTS:
+                if ext_host in val:
+                    needs_redis = True
+                    env[key] = val.replace(ext_host, SMOKE_REDIS)
+
+    # Inject temporary PostgreSQL
+    if pg_credentials:
+        first_db_name, first_creds = next(iter(pg_credentials.items()))
+        pg_service: dict = {
+            "image": "postgres:16-alpine",
+            "environment": {
+                "POSTGRES_USER": first_creds["user"],
+                "POSTGRES_PASSWORD": first_creds["password"],
+                "POSTGRES_DB": first_db_name,
+            },
+            "healthcheck": {
+                "test": ["CMD-SHELL", f"pg_isready -U {first_creds['user']}"],
+                "interval": "3s",
+                "timeout": "3s",
+                "retries": 10,
+            },
+        }
+        if all_network_names:
+            pg_service["networks"] = {n: None for n in all_network_names}
+        services[SMOKE_POSTGRES] = pg_service
+
+        # Add depends_on so app services wait for the DB to be ready
+        for svc_name, svc in services.items():
+            if svc_name in (SMOKE_POSTGRES, SMOKE_REDIS):
+                continue
+            env = svc.get("environment", {})
+            if any(isinstance(v, str) and SMOKE_POSTGRES in v for v in env.values()):
+                depends_on = svc.get("depends_on", {})
+                if isinstance(depends_on, list):
+                    depends_on = {d: {"condition": "service_started"} for d in depends_on}
+                depends_on[SMOKE_POSTGRES] = {"condition": "service_healthy"}
+                svc["depends_on"] = depends_on
+
+        print(f"  injected {SMOKE_POSTGRES} (db: {first_db_name}, user: {first_creds['user']})")
+
+    # Inject temporary Redis
+    if needs_redis:
+        redis_service: dict = {
+            "image": "redis:7-alpine",
+            "healthcheck": {
+                "test": ["CMD", "redis-cli", "ping"],
+                "interval": "3s",
+                "timeout": "3s",
+                "retries": 10,
+            },
+        }
+        if all_network_names:
+            redis_service["networks"] = {n: None for n in all_network_names}
+        services[SMOKE_REDIS] = redis_service
+
+        print(f"  injected {SMOKE_REDIS}")
 
     return config
 
@@ -91,19 +208,22 @@ def main() -> None:
     parser.add_argument("--project", required=True, help="Smoke project name for volume prefixing")
     args = parser.parse_args()
 
-    print(f"📄 Reading compose config from: {args.compose_file}")
+    print(f"Reading compose config from: {args.compose_file}")
     config = resolve_compose(args.compose_file)
 
     service_names = list(config.get("services", {}).keys())
-    print(f"🐳 Found services: {', '.join(service_names)}")
+    print(f"Found services: {', '.join(service_names)}")
 
-    print(f"🔧 Isolating config for project: {args.project}")
+    print(f"Isolating config for project: {args.project}")
     isolated = isolate_config(config, args.project)
+
+    print("Isolating external service references...")
+    isolated = isolate_external_services(isolated)
 
     with open(args.output, "w") as f:
         json.dump(isolated, f, indent=2)
 
-    print(f"✅ Wrote isolated compose config to: {args.output}")
+    print(f"Wrote isolated compose config to: {args.output}")
 
 
 if __name__ == "__main__":
