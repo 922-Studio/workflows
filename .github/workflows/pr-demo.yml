@@ -37,7 +37,12 @@ on:
         required: false
         type: string
         default: "9100"
-        description: "Base port for preview environments. Preview port = port_base + PR number."
+        description: "Base port for preview environments. Preview port = port_base + (PR number % port_range)."
+      port_range:
+        required: false
+        type: string
+        default: "100"
+        description: "Port range before wrapping. PR 100 reuses port of PR 0, PR 200 reuses PR 0, etc."
       compose_file:
         required: false
         type: string
@@ -58,11 +63,16 @@ on:
         type: string
         default: "5"
         description: "Maximum number of concurrent previews allowed on the runner."
+      preview_domain:
+        required: false
+        type: string
+        default: ""
+        description: "Domain for public preview URLs, e.g. '922-studio.com'. Generates {project}-pr-{N}.{domain}. When empty, falls back to Tailscale IP."
       tailscale_ip:
         required: false
         type: string
         default: "100.112.171.16"
-        description: "Tailscale IP of the self-hosted runner, used to construct the preview URL."
+        description: "Tailscale IP of the self-hosted runner. Only used when preview_domain is empty."
       action:
         required: true
         type: string
@@ -116,8 +126,10 @@ jobs:
           PROJECT_NAME: ${{ inputs.project_name }}
           REPO_PATH: ${{ inputs.repository_path }}
           PORT_BASE: ${{ inputs.port_base }}
+          PORT_RANGE: ${{ inputs.port_range }}
           MAX_DEMOS: ${{ inputs.max_demos }}
           COMPOSE_FILE: ${{ inputs.compose_file }}
+          PREVIEW_DOMAIN: ${{ inputs.preview_domain }}
           TAILSCALE_IP: ${{ inputs.tailscale_ip }}
           HEALTHCHECK_PATH: ${{ inputs.healthcheck_path }}
           HEALTHCHECK_TIMEOUT: ${{ inputs.healthcheck_timeout }}
@@ -132,12 +144,16 @@ jobs:
           echo "$OUTPUT"
 
           # Extract the URL from STARTED output line, e.g.:
-          #   STARTED pr=42 url=http://100.112.171.16:9142 branch=feature/xyz
+          #   STARTED pr=42 url=https://drafter-pr-42.922-studio.com branch=feature/xyz
           PREVIEW_URL=$(echo "$OUTPUT" | grep '^STARTED' | grep -o 'url=[^ ]*' | cut -d= -f2)
 
           if [[ -z "$PREVIEW_URL" ]]; then
             echo "WARNING: Could not extract preview URL from output"
-            PREVIEW_URL="http://${{ inputs.tailscale_ip }}:$(( ${{ inputs.port_base }} + ${{ github.event.pull_request.number }} ))"
+            if [[ -n "${{ inputs.preview_domain }}" ]]; then
+              PREVIEW_URL="https://${{ inputs.project_name }}-pr-${{ github.event.pull_request.number }}.${{ inputs.preview_domain }}"
+            else
+              PREVIEW_URL="http://${{ inputs.tailscale_ip }}:$(( ${{ inputs.port_base }} + (${{ github.event.pull_request.number }} % ${{ inputs.port_range }}) ))"
+            fi
           fi
 
           echo "preview_url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
@@ -150,7 +166,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_GITHUB }}
         run: |
-          PORT=$(( ${{ inputs.port_base }} + ${{ github.event.pull_request.number }} ))
           TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
           PREVIEW_URL="${{ steps.start_preview.outputs.preview_url }}"
           BRANCH="${{ github.head_ref }}"
@@ -162,8 +177,6 @@ jobs:
           **URL**: ${PREVIEW_URL}
           **Branch**: \`${BRANCH}\`
           **Updated**: ${TIMESTAMP}
-
-          > Preview runs on port \`${PORT}\` via Tailscale. Access requires Tailscale connectivity.
           COMMENT_EOF
           )
           # Remove leading whitespace from heredoc
@@ -242,8 +255,10 @@ jobs:
           PROJECT_NAME: ${{ inputs.project_name }}
           REPO_PATH: ${{ inputs.repository_path }}
           PORT_BASE: ${{ inputs.port_base }}
+          PORT_RANGE: ${{ inputs.port_range }}
           MAX_DEMOS: ${{ inputs.max_demos }}
           COMPOSE_FILE: ${{ inputs.compose_file }}
+          PREVIEW_DOMAIN: ${{ inputs.preview_domain }}
           TAILSCALE_IP: ${{ inputs.tailscale_ip }}
           HEALTHCHECK_PATH: ${{ inputs.healthcheck_path }}
           HEALTHCHECK_TIMEOUT: ${{ inputs.healthcheck_timeout }}
