@@ -159,39 +159,37 @@ jobs:
           echo "preview_url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
           echo "Preview URL: ${PREVIEW_URL}"
 
-      # Post or update a comment on the PR with the preview URL.
-      # Uses --edit-last to update an existing bot comment rather than
-      # spamming a new one on every synchronize event.
+      # Post a new comment on the PR with the preview URL.
+      # Uses GITHUB_TOKEN so comments appear from github-actions[bot].
       - name: Post preview URL comment
         env:
-          GH_TOKEN: ${{ secrets.PAT_GITHUB }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
           PREVIEW_URL="${{ steps.start_preview.outputs.preview_url }}"
           BRANCH="${{ github.head_ref }}"
+          COMMIT="${{ github.event.pull_request.head.sha }}"
+          SHORT_COMMIT="${COMMIT:0:7}"
 
           COMMENT_BODY=$(cat <<COMMENT_EOF
           ### PR Preview
 
-          **Status**: Live
-          **URL**: ${PREVIEW_URL}
-          **Branch**: \`${BRANCH}\`
-          **Updated**: ${TIMESTAMP}
+          | | |
+          |---|---|
+          | **Status** | Live |
+          | **URL** | ${PREVIEW_URL} |
+          | **Branch** | \`${BRANCH}\` |
+          | **Commit** | \`${SHORT_COMMIT}\` |
+          | **Updated** | ${TIMESTAMP} |
           COMMENT_EOF
           )
-          # Remove leading whitespace from heredoc
           COMMENT_BODY=$(echo "$COMMENT_BODY" | sed 's/^          //')
 
-          # Try to update existing comment; create a new one if none exists yet.
           gh pr comment "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" \
-            --body "$COMMENT_BODY" \
-            --edit-last 2>/dev/null \
-          || gh pr comment "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
             --body "$COMMENT_BODY"
 
-          echo "PR comment posted/updated"
+          echo "PR comment posted"
 
       - name: Show logs on failure
         if: failure()
@@ -269,10 +267,10 @@ jobs:
             stop \
             "${{ github.event.pull_request.number }}"
 
-      # Update the PR comment to show the preview has been taken down.
-      - name: Update PR comment to indicate teardown
+      # Post a new comment to show the preview has been taken down.
+      - name: Post teardown comment
         env:
-          GH_TOKEN: ${{ secrets.PAT_GITHUB }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
           REASON="${{ github.event.pull_request.merged && 'merged' || 'closed' }}"
@@ -281,9 +279,11 @@ jobs:
           COMMENT_BODY=$(cat <<COMMENT_EOF
           ### PR Preview
 
-          **Status**: Offline (PR ${REASON})
-          **Branch**: \`${BRANCH}\`
-          **Stopped**: ${TIMESTAMP}
+          | | |
+          |---|---|
+          | **Status** | Offline (PR ${REASON}) |
+          | **Branch** | \`${BRANCH}\` |
+          | **Stopped** | ${TIMESTAMP} |
 
           > The preview environment has been stopped and removed.
           COMMENT_EOF
@@ -292,13 +292,9 @@ jobs:
 
           gh pr comment "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
-            --body "$COMMENT_BODY" \
-            --edit-last 2>/dev/null \
-          || gh pr comment "${{ github.event.pull_request.number }}" \
-            --repo "${{ github.repository }}" \
             --body "$COMMENT_BODY"
 
-          echo "PR comment updated — preview offline"
+          echo "PR comment posted — preview offline"
 
       - name: Log cleanup result
         if: always()
