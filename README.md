@@ -32,6 +32,17 @@ Automatically generates MCP (Model Context Protocol) servers from a service's Op
 
 **Documentation**: [docs/generate-mcp.md](docs/generate-mcp.md)
 
+### 7. PR Preview Environment
+Manages Docker-based PR preview environments on a self-hosted runner. Spins up an isolated container stack per PR branch on open/sync (with a Traefik-routed public subdomain or Tailscale IP fallback) and tears it down on close. Posts and updates a PR comment with the live preview URL throughout the PR lifecycle.
+
+**Documentation**: [docs/pr-demo.md](docs/pr-demo.md)
+
+### 8. Frontend Tests
+Runs a Node.js frontend test suite (Vitest) on a self-hosted runner with local disk caching for `node_modules`, optional build verification, Allure result uploads, and optional Prometheus Pushgateway coverage reporting. Supports npm and pnpm (via corepack), configurable working directories, and failure notifications via email or Discord.
+
+### 9. Cancel Previous Runs
+Cancels any in-progress or queued runs of the same workflow on the same branch when a new run starts, preventing redundant CI work on rapid pushes.
+
 ## Usage
 
 To use this workflow in your own repository, create a new workflow file (e.g., `.github/workflows/release.yml`) with the following content:
