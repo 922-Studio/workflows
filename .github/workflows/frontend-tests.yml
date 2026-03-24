@@ -151,6 +151,15 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
+      - name: Clean stale node_modules outside app dir
+        run: |
+          # Prevent Vite/Node from resolving modules from a leftover
+          # node_modules at the workspace root (outside app-code/).
+          if [ -d "node_modules" ] && [ "${{ steps.paths.outputs.app_dir }}" != "." ]; then
+            echo "🧹 Removing stale node_modules at workspace root..."
+            rm -rf node_modules
+          fi
+
       - name: Restore node_modules (local disk cache)
         id: npm-cache
         run: |
