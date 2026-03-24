@@ -63,6 +63,10 @@ on:
         type: string
         default: "100.112.171.16"
         description: "Tailscale IP of the self-hosted runner, used to construct the preview URL."
+      action:
+        required: true
+        type: string
+        description: "PR action: 'start' (opened/synchronize) or 'stop' (closed). Caller must pass this since github.event.action is not reliable in reusable workflows."
     secrets:
       PAT_GITHUB:
         required: true
@@ -74,9 +78,7 @@ jobs:
   deploy-preview:
     name: Deploy PR Preview
     runs-on: self-hosted
-    if: >
-      github.event_name == 'pull_request' &&
-      (github.event.action == 'opened' || github.event.action == 'synchronize')
+    if: inputs.action == 'start'
 
     steps:
       - name: Log preview deployment start
@@ -210,9 +212,7 @@ jobs:
   cleanup-preview:
     name: Cleanup PR Preview
     runs-on: self-hosted
-    if: >
-      github.event_name == 'pull_request' &&
-      github.event.action == 'closed'
+    if: inputs.action == 'stop'
 
     steps:
       - name: Log preview cleanup start
