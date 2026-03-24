@@ -168,8 +168,33 @@ jobs:
             # run that created the cache and would cause Vitest resolver failures
             # on any other runner or workspace path.
             rm -rf "${{ steps.paths.outputs.app_dir }}/node_modules/.vite"
-            echo "npm_cache_hit=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Done (local I/O only, no network)."
+
+            # Validate restored cache: spot-check that top-level packages from
+            # package.json actually exist in node_modules.  A cache entry can be
+            # stale if it was saved from a partial install or before a new
+            # dependency was added while the lockfile hash stayed the same.
+            MISSING=0
+            PKG="${{ steps.paths.outputs.app_dir }}/package.json"
+            NM="${{ steps.paths.outputs.app_dir }}/node_modules"
+            for dep in $(node -e "
+              const p = require('./' + process.argv[1]);
+              const deps = Object.keys(p.dependencies || {}).concat(Object.keys(p.devDependencies || {}));
+              console.log(deps.join('\n'));
+            " "$PKG" 2>/dev/null); do
+              if [ ! -d "$NM/$dep" ] && [ ! -f "$NM/$dep" ]; then
+                echo "⚠️  Missing package in cache: $dep"
+                MISSING=1
+              fi
+            done
+
+            if [ "$MISSING" -eq 1 ]; then
+              echo "❌ Cache is stale — deleting cached entry and forcing fresh install."
+              rm -rf "$NM" "$CACHE_PATH"
+              echo "npm_cache_hit=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "npm_cache_hit=true" >> "$GITHUB_OUTPUT"
+              echo "✅ Done (local I/O only, no network). All packages validated."
+            fi
           else
             echo "❌ Cache miss — will run install."
             echo "npm_cache_hit=false" >> "$GITHUB_OUTPUT"
