@@ -29,6 +29,11 @@ on:
         type: boolean
         default: true
         description: "Whether to pull latest code before deploying (default: true). Set to false if a prior step (e.g. smoke-test) already pulled"
+      environment:
+        required: false
+        type: string
+        default: "prod"
+        description: "Target environment (dev or prod)"
     secrets:
       PAT_GITHUB:
         required: false
@@ -43,6 +48,7 @@ jobs:
           echo "=========================================="
           echo "Starting Docker Deployment"
           echo "=========================================="
+          echo "Environment: ${{ inputs.environment }}"
           echo "Repository Path: ${{ inputs.repository_path }}"
           echo "Docker Compose File: ${{ inputs.docker_compose_file }}"
           echo "Service Name: ${{ inputs.service_name || 'ALL SERVICES' }}"
@@ -223,7 +229,7 @@ jobs:
           fi
 
           chmod +x "$SCRIPT_PATH"
-          ./"$SCRIPT_PATH"
+          ./"$SCRIPT_PATH" ${{ inputs.environment }}
           echo "✅ Boot script completed"
 
       # --- Verify (always runs regardless of path) ---
@@ -289,9 +295,11 @@ jobs:
       - name: Log deployment success
         if: success()
         run: |
+          ENV_UPPER=$(echo "${{ inputs.environment }}" | tr '[:lower:]' '[:upper:]')
           echo "=========================================="
-          echo "✅ DEPLOYMENT SUCCESSFUL"
+          echo "✅ [$ENV_UPPER] DEPLOYMENT SUCCESSFUL"
           echo "=========================================="
+          echo "Environment: ${{ inputs.environment }}"
           echo "Service: ${{ inputs.service_name || 'ALL SERVICES' }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
