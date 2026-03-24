@@ -150,15 +150,22 @@ jobs:
         run: |
           PORT=$(( ${{ inputs.port_base }} + ${{ github.event.pull_request.number }} ))
           TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
+          PREVIEW_URL="${{ steps.start_preview.outputs.preview_url }}"
+          BRANCH="${{ github.head_ref }}"
 
-          COMMENT_BODY="### PR Preview
+          COMMENT_BODY=$(cat <<COMMENT_EOF
+          ### PR Preview
 
-**Status**: Live
-**URL**: ${{ steps.start_preview.outputs.preview_url }}
-**Branch**: \`${{ github.head_ref }}\`
-**Updated**: ${TIMESTAMP}
+          **Status**: Live
+          **URL**: ${PREVIEW_URL}
+          **Branch**: \`${BRANCH}\`
+          **Updated**: ${TIMESTAMP}
 
-> Preview runs on port \`${PORT}\` via Tailscale. Access requires Tailscale connectivity."
+          > Preview runs on port \`${PORT}\` via Tailscale. Access requires Tailscale connectivity.
+          COMMENT_EOF
+          )
+          # Remove leading whitespace from heredoc
+          COMMENT_BODY=$(echo "$COMMENT_BODY" | sed 's/^          //')
 
           # Try to update existing comment; create a new one if none exists yet.
           gh pr comment "${{ github.event.pull_request.number }}" \
@@ -254,14 +261,19 @@ jobs:
         run: |
           TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
           REASON="${{ github.event.pull_request.merged && 'merged' || 'closed' }}"
+          BRANCH="${{ github.head_ref }}"
 
-          COMMENT_BODY="### PR Preview
+          COMMENT_BODY=$(cat <<COMMENT_EOF
+          ### PR Preview
 
-**Status**: Offline (PR ${REASON})
-**Branch**: \`${{ github.head_ref }}\`
-**Stopped**: ${TIMESTAMP}
+          **Status**: Offline (PR ${REASON})
+          **Branch**: \`${BRANCH}\`
+          **Stopped**: ${TIMESTAMP}
 
-> The preview environment has been stopped and removed."
+          > The preview environment has been stopped and removed.
+          COMMENT_EOF
+          )
+          COMMENT_BODY=$(echo "$COMMENT_BODY" | sed 's/^          //')
 
           gh pr comment "${{ github.event.pull_request.number }}" \
             --repo "${{ github.repository }}" \
