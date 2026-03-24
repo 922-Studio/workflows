@@ -122,8 +122,13 @@ jobs:
 
           # Configure PAT if provided — first normalize the URL to plain https://github.com/...
           REMOTE_URL=$(git config --get remote.origin.url)
-          # Strip any existing PAT prefixes (handles corrupted multi-prefix URLs)
-          REPO_PATH=$(echo "$REMOTE_URL" | sed -E 's|https://(x-access-token:[^@]+@)?github\.com/||g')
+          # Handle both SSH (git@github.com:org/repo.git) and HTTPS formats
+          if [[ "$REMOTE_URL" == git@* ]]; then
+            REPO_PATH=$(echo "$REMOTE_URL" | sed 's|git@github.com:||')
+          else
+            # Strip any existing PAT prefixes (handles corrupted multi-prefix URLs)
+            REPO_PATH=$(echo "$REMOTE_URL" | sed -E 's|https://(x-access-token:[^@]+@)?github\.com/||g')
+          fi
           # Restore clean URL before adding PAT
           git remote set-url origin "https://github.com/$REPO_PATH"
 
