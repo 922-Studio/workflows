@@ -21,8 +21,8 @@ import sys
 from urllib.parse import urlparse
 
 # Hostnames of shared infrastructure that must be replaced with temp services
-EXTERNAL_POSTGRES_HOSTS = {"shared_postgres"}
-EXTERNAL_REDIS_HOSTS = {"shared_redis"}
+EXTERNAL_POSTGRES_HOSTS = {"shared_postgres", "dev_postgres"}
+EXTERNAL_REDIS_HOSTS = {"shared_redis", "dev_redis"}
 
 # Names for injected temporary services
 SMOKE_POSTGRES = "smoke-postgres"
