@@ -8,6 +8,16 @@ on:
         type: string
         default: '20.x'
         description: 'Node.js version to use'
+      lockfile_name:
+        required: false
+        type: string
+        default: 'package-lock.json'
+        description: 'Lockfile name for cache key hashing (e.g. package-lock.json or pnpm-lock.yaml)'
+      enable_corepack:
+        required: false
+        type: boolean
+        default: false
+        description: 'Enable corepack for pnpm/yarn support (runs corepack enable before install)'
       working_directory:
         required: false
         type: string
@@ -151,6 +161,12 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
+      - name: Enable corepack (pnpm/yarn)
+        if: inputs.enable_corepack
+        run: |
+          corepack enable
+          echo "✅ Corepack enabled."
+
       - name: Clean stale node_modules outside app dir
         run: |
           # Prevent Vite/Node from resolving modules from a leftover
@@ -165,7 +181,7 @@ jobs:
         run: |
           CACHE_BASE="/home/lab/runner-cache/node-modules"
           mkdir -p "$CACHE_BASE"
-          LOCKFILE="${{ steps.paths.outputs.app_dir }}/package-lock.json"
+          LOCKFILE="${{ steps.paths.outputs.app_dir }}/${{ inputs.lockfile_name }}"
           HASHSRC=$([ -f "$LOCKFILE" ] && echo "$LOCKFILE" || echo "${{ steps.paths.outputs.app_dir }}/package.json")
           HASH=$(sha256sum "$HASHSRC" | awk '{print $1}')
           CACHE_PATH="$CACHE_BASE/$HASH"

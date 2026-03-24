@@ -1,0 +1,284 @@
+name: PR Preview Environment
+
+# Reusable workflow — manages Docker-based PR preview environments.
+#
+# Spin up a live preview container stack when a PR is opened/updated,
+# tear it down when the PR is closed.
+#
+# How it works:
+#   1. On PR open/sync  → deploy-preview job runs pr-demo.sh start
+#   2. On PR close      → cleanup-preview job runs pr-demo.sh stop
+#   3. A PR comment is created/updated with the preview URL after each event.
+#
+# Callers must pass at minimum: repository_path, project_name, PAT_GITHUB.
+#
+# Example caller workflow:
+#   jobs:
+#     pr-preview:
+#       uses: 922-Studio/workflows/.github/workflows/pr-demo.yml@main
+#       with:
+#         repository_path: /home/lab/Drafter
+#         project_name: drafter
+#       secrets:
+#         PAT_GITHUB: ${{ secrets.PAT_GITHUB }}
+
+on:
+  workflow_call:
+    inputs:
+      repository_path:
+        required: true
+        type: string
+        description: "Absolute path to the repository on the self-hosted runner, e.g. /home/lab/Drafter"
+      project_name:
+        required: true
+        type: string
+        description: "Short identifier for the project, e.g. drafter. Used in container names and state files."
+      port_base:
+        required: false
+        type: string
+        default: "9100"
+        description: "Base port for preview environments. Preview port = port_base + PR number."
+      compose_file:
+        required: false
+        type: string
+        default: "docker-compose.yaml"
+        description: "Docker Compose file to use, relative to the repository root."
+      healthcheck_path:
+        required: false
+        type: string
+        default: "/api/health"
+        description: "HTTP path used to verify the preview container is up and healthy."
+      healthcheck_timeout:
+        required: false
+        type: string
+        default: "60"
+        description: "Seconds to wait for the healthcheck to pass before reporting the preview as started."
+      max_demos:
+        required: false
+        type: string
+        default: "5"
+        description: "Maximum number of concurrent previews allowed on the runner."
+      tailscale_ip:
+        required: false
+        type: string
+        default: "100.112.171.16"
+        description: "Tailscale IP of the self-hosted runner, used to construct the preview URL."
+    secrets:
+      PAT_GITHUB:
+        required: true
+        description: "Personal Access Token for checking out the workflows repo and posting PR comments."
+
+# ── Deploy Preview (PR opened or updated) ────────────────────────────────────
+
+jobs:
+  deploy-preview:
+    name: Deploy PR Preview
+    runs-on: self-hosted
+    if: >
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' || github.event.action == 'synchronize')
+
+    steps:
+      - name: Log preview deployment start
+        run: |
+          echo "=========================================="
+          echo "PR Preview — Deploy"
+          echo "=========================================="
+          echo "Project:    ${{ inputs.project_name }}"
+          echo "Repo path:  ${{ inputs.repository_path }}"
+          echo "PR number:  ${{ github.event.pull_request.number }}"
+          echo "Branch:     ${{ github.head_ref }}"
+          echo "Port base:  ${{ inputs.port_base }}"
+          echo "Compose:    ${{ inputs.compose_file }}"
+          echo "Timestamp:  $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      # Checkout the workflows repo to get the latest pr-demo.sh script.
+      # We place it under workflow-scripts/ to keep the workspace clean.
+      - name: Checkout workflow scripts
+        uses: actions/checkout@v5
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: workflow-scripts
+          token: ${{ secrets.PAT_GITHUB }}
+
+      - name: Make pr-demo.sh executable
+        run: chmod +x workflow-scripts/.github/scripts/pr-demo.sh
+
+      # Run the start command with all configuration via env vars.
+      # Output is captured to extract the preview URL for the PR comment.
+      - name: Start PR preview
+        id: start_preview
+        env:
+          PROJECT_NAME: ${{ inputs.project_name }}
+          REPO_PATH: ${{ inputs.repository_path }}
+          PORT_BASE: ${{ inputs.port_base }}
+          MAX_DEMOS: ${{ inputs.max_demos }}
+          COMPOSE_FILE: ${{ inputs.compose_file }}
+          TAILSCALE_IP: ${{ inputs.tailscale_ip }}
+          HEALTHCHECK_PATH: ${{ inputs.healthcheck_path }}
+          HEALTHCHECK_TIMEOUT: ${{ inputs.healthcheck_timeout }}
+        run: |
+          echo "Starting preview for PR #${{ github.event.pull_request.number }}..."
+
+          OUTPUT=$(workflow-scripts/.github/scripts/pr-demo.sh \
+            start \
+            "${{ github.event.pull_request.number }}" \
+            "${{ github.head_ref }}" 2>&1)
+
+          echo "$OUTPUT"
+
+          # Extract the URL from STARTED output line, e.g.:
+          #   STARTED pr=42 url=http://100.112.171.16:9142 branch=feature/xyz
+          PREVIEW_URL=$(echo "$OUTPUT" | grep '^STARTED' | grep -o 'url=[^ ]*' | cut -d= -f2)
+
+          if [[ -z "$PREVIEW_URL" ]]; then
+            echo "WARNING: Could not extract preview URL from output"
+            PREVIEW_URL="http://${{ inputs.tailscale_ip }}:$(( ${{ inputs.port_base }} + ${{ github.event.pull_request.number }} ))"
+          fi
+
+          echo "preview_url=${PREVIEW_URL}" >> "$GITHUB_OUTPUT"
+          echo "Preview URL: ${PREVIEW_URL}"
+
+      # Post or update a comment on the PR with the preview URL.
+      # Uses --edit-last to update an existing bot comment rather than
+      # spamming a new one on every synchronize event.
+      - name: Post preview URL comment
+        env:
+          GH_TOKEN: ${{ secrets.PAT_GITHUB }}
+        run: |
+          PORT=$(( ${{ inputs.port_base }} + ${{ github.event.pull_request.number }} ))
+          TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
+
+          COMMENT_BODY="### PR Preview
+
+**Status**: Live
+**URL**: ${{ steps.start_preview.outputs.preview_url }}
+**Branch**: \`${{ github.head_ref }}\`
+**Updated**: ${TIMESTAMP}
+
+> Preview runs on port \`${PORT}\` via Tailscale. Access requires Tailscale connectivity."
+
+          # Try to update existing comment; create a new one if none exists yet.
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "$COMMENT_BODY" \
+            --edit-last 2>/dev/null \
+          || gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "$COMMENT_BODY"
+
+          echo "PR comment posted/updated"
+
+      - name: Show logs on failure
+        if: failure()
+        env:
+          PROJECT_NAME: ${{ inputs.project_name }}
+        run: |
+          echo "=========================================="
+          echo "DEPLOY FAILED — Docker compose logs:"
+          echo "=========================================="
+          PROJ="${PROJECT_NAME}-pr-${{ github.event.pull_request.number }}"
+          WORKTREE="/tmp/${PROJECT_NAME}-pr/pr-${{ github.event.pull_request.number }}"
+          docker compose -p "$PROJ" logs --tail=100 2>/dev/null || true
+          echo ""
+          echo "Docker system status:"
+          docker system df || true
+
+      - name: Log deploy result
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "PR Preview Deploy — ${{ job.status == 'success' && 'SUCCESS' || 'FAILED' }}"
+          echo "=========================================="
+          echo "PR:        #${{ github.event.pull_request.number }}"
+          echo "Branch:    ${{ github.head_ref }}"
+          echo "URL:       ${{ steps.start_preview.outputs.preview_url }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+# ── Cleanup Preview (PR closed) ───────────────────────────────────────────────
+
+  cleanup-preview:
+    name: Cleanup PR Preview
+    runs-on: self-hosted
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.action == 'closed'
+
+    steps:
+      - name: Log preview cleanup start
+        run: |
+          echo "=========================================="
+          echo "PR Preview — Cleanup"
+          echo "=========================================="
+          echo "Project:   ${{ inputs.project_name }}"
+          echo "PR number: ${{ github.event.pull_request.number }}"
+          echo "Reason:    PR ${{ github.event.pull_request.merged && 'merged' || 'closed' }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      - name: Checkout workflow scripts
+        uses: actions/checkout@v5
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: workflow-scripts
+          token: ${{ secrets.PAT_GITHUB }}
+
+      - name: Make pr-demo.sh executable
+        run: chmod +x workflow-scripts/.github/scripts/pr-demo.sh
+
+      - name: Stop PR preview
+        env:
+          PROJECT_NAME: ${{ inputs.project_name }}
+          REPO_PATH: ${{ inputs.repository_path }}
+          PORT_BASE: ${{ inputs.port_base }}
+          MAX_DEMOS: ${{ inputs.max_demos }}
+          COMPOSE_FILE: ${{ inputs.compose_file }}
+          TAILSCALE_IP: ${{ inputs.tailscale_ip }}
+          HEALTHCHECK_PATH: ${{ inputs.healthcheck_path }}
+          HEALTHCHECK_TIMEOUT: ${{ inputs.healthcheck_timeout }}
+        run: |
+          echo "Stopping preview for PR #${{ github.event.pull_request.number }}..."
+
+          workflow-scripts/.github/scripts/pr-demo.sh \
+            stop \
+            "${{ github.event.pull_request.number }}"
+
+      # Update the PR comment to show the preview has been taken down.
+      - name: Update PR comment to indicate teardown
+        env:
+          GH_TOKEN: ${{ secrets.PAT_GITHUB }}
+        run: |
+          TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S UTC')
+          REASON="${{ github.event.pull_request.merged && 'merged' || 'closed' }}"
+
+          COMMENT_BODY="### PR Preview
+
+**Status**: Offline (PR ${REASON})
+**Branch**: \`${{ github.head_ref }}\`
+**Stopped**: ${TIMESTAMP}
+
+> The preview environment has been stopped and removed."
+
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "$COMMENT_BODY" \
+            --edit-last 2>/dev/null \
+          || gh pr comment "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --body "$COMMENT_BODY"
+
+          echo "PR comment updated — preview offline"
+
+      - name: Log cleanup result
+        if: always()
+        run: |
+          echo "=========================================="
+          echo "PR Preview Cleanup — ${{ job.status == 'success' && 'SUCCESS' || 'FAILED' }}"
+          echo "=========================================="
+          echo "PR:        #${{ github.event.pull_request.number }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
