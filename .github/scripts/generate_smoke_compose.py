@@ -201,6 +201,43 @@ def isolate_external_services(config: dict) -> dict:
     return config
 
 
+def ensure_ports_exposed(config: dict) -> dict:
+    """Ensure services have published ports for smoke testing.
+
+    In production, services behind Traefik don't need published ports — Traefik
+    routes via Docker network. But in smoke tests, HTTP health checks need to
+    reach containers from the host. This function extracts the container port
+    from Traefik labels and adds a random (0) host port mapping if none exists.
+    """
+    services = config.get("services", {})
+
+    for name, svc in services.items():
+        # Skip if already has ports
+        if svc.get("ports"):
+            continue
+
+        # Look for Traefik loadbalancer port in labels
+        labels = svc.get("labels", {})
+        if isinstance(labels, list):
+            label_dict = {}
+            for label in labels:
+                if isinstance(label, str) and "=" in label:
+                    k, v = label.split("=", 1)
+                    label_dict[k] = v
+            labels = label_dict
+
+        for key, val in labels.items():
+            if "loadbalancer.server.port" in key:
+                container_port = str(val).strip()
+                svc["ports"] = [
+                    {"target": int(container_port), "published": "0", "protocol": "tcp"}
+                ]
+                print(f"  exposed port {container_port} for {name} (from Traefik labels)")
+                break
+
+    return config
+
+
 def apply_prebuilt_image(config: dict, prebuilt_image: str) -> dict:
     """Replace all build: sections with a fixed image reference.
 
@@ -258,6 +295,9 @@ def main() -> None:
 
     print("Isolating external service references...")
     isolated = isolate_external_services(isolated)
+
+    print("Ensuring container ports are exposed for HTTP health checks...")
+    isolated = ensure_ports_exposed(isolated)
 
     with open(args.output, "w") as f:
         json.dump(isolated, f, indent=2)
