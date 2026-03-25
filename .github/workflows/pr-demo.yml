@@ -120,6 +120,7 @@ jobs:
 
       # Run the start command with all configuration via env vars.
       # Output is captured to extract the preview URL for the PR comment.
+      # We use set +e to ensure output is always displayed, even on failure.
       - name: Start PR preview
         id: start_preview
         env:
@@ -136,12 +137,20 @@ jobs:
         run: |
           echo "Starting preview for PR #${{ github.event.pull_request.number }}..."
 
+          set +e
           OUTPUT=$(workflow-scripts/.github/scripts/pr-demo.sh \
             start \
             "${{ github.event.pull_request.number }}" \
             "${{ github.head_ref }}" 2>&1)
+          EXIT_CODE=$?
+          set -e
 
           echo "$OUTPUT"
+
+          if [[ $EXIT_CODE -ne 0 ]]; then
+            echo "::error::pr-demo.sh exited with code $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
 
           # Extract the URL from STARTED output line, e.g.:
           #   STARTED pr=42 url=https://drafter-pr-42.922-studio.com branch=feature/xyz
@@ -196,14 +205,38 @@ jobs:
         env:
           PROJECT_NAME: ${{ inputs.project_name }}
         run: |
-          echo "=========================================="
-          echo "DEPLOY FAILED — Docker compose logs:"
-          echo "=========================================="
           PROJ="${PROJECT_NAME}-pr-${{ github.event.pull_request.number }}"
           WORKTREE="/tmp/${PROJECT_NAME}-pr/pr-${{ github.event.pull_request.number }}"
-          docker compose -p "$PROJ" logs --tail=100 2>/dev/null || true
+
+          echo "=========================================="
+          echo "DEPLOY FAILED — Diagnostics"
+          echo "=========================================="
+
           echo ""
-          echo "Docker system status:"
+          echo "── Container status ──"
+          docker compose -p "$PROJ" ps -a 2>/dev/null || echo "(no compose project found)"
+
+          echo ""
+          echo "── Container logs ──"
+          docker compose -p "$PROJ" logs --tail=150 2>/dev/null || echo "(no logs available)"
+
+          echo ""
+          echo "── Container inspect (last exit) ──"
+          for cid in $(docker compose -p "$PROJ" ps -aq 2>/dev/null); do
+            echo "--- Container: $cid ---"
+            docker inspect "$cid" --format '{{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' 2>/dev/null || true
+          done
+
+          echo ""
+          echo "── Worktree .env (redacted) ──"
+          if [[ -f "${WORKTREE}/.env" ]]; then
+            grep -v -iE '(password|secret|token|key|auth)' "${WORKTREE}/.env" 2>/dev/null || echo "(could not read)"
+          else
+            echo "(no .env found at ${WORKTREE})"
+          fi
+
+          echo ""
+          echo "── Docker system status ──"
           docker system df || true
 
       - name: Log deploy result

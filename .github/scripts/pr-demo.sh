@@ -20,6 +20,7 @@
 #   TAILSCALE_IP        (optional, default: "100.112.171.16") — fallback IP when PREVIEW_DOMAIN is not set
 #   HEALTHCHECK_PATH    (optional, default: "/api/health") — path to verify container is up
 #   HEALTHCHECK_TIMEOUT (optional, default: 60) — seconds to wait for healthy container
+#   CONTAINER_PORT      (optional, default: 3000) — internal container port to map to the preview port
 #
 # State is tracked via /tmp/{PROJECT_NAME}-pr-state/ (one JSON file per PR).
 # Git worktrees live at /tmp/{PROJECT_NAME}-pr/pr-{number}.
@@ -41,6 +42,7 @@ PREVIEW_DOMAIN="${PREVIEW_DOMAIN:-}"
 TAILSCALE_IP="${TAILSCALE_IP:-100.112.171.16}"
 HEALTHCHECK_PATH="${HEALTHCHECK_PATH:-/api/health}"
 HEALTHCHECK_TIMEOUT="${HEALTHCHECK_TIMEOUT:-60}"
+CONTAINER_PORT="${CONTAINER_PORT:-3000}"
 
 WORKTREE_BASE="/tmp/${PROJECT_NAME}-pr"
 STATE_DIR="/tmp/${PROJECT_NAME}-pr-state"
@@ -304,13 +306,37 @@ EOF
 
   ok ".env prepared for PR #${pr}"
 
+  # ── 4b. Create compose override for port mapping ───────────────────────────
+  # The project compose file may not expose ports (relying on Traefik). For
+  # previews we need a host port mapping so the container is directly accessible.
+  # Discover the first service name and generate an override file in the worktree.
+  local first_service
+  first_service=$(docker compose -f "${worktree}/${COMPOSE_FILE}" --project-directory "$worktree" config --services 2>/dev/null | head -1)
+
+  if [[ -n "$first_service" ]]; then
+    local override_file="${worktree}/docker-compose.preview.yml"
+    cat > "$override_file" <<EOF
+services:
+  ${first_service}:
+    ports:
+      - "${port}:${CONTAINER_PORT}"
+EOF
+    ok "Compose override created: port ${port} → 3000 (service: ${first_service})"
+  else
+    warn "Could not detect service name — skipping port override"
+  fi
+
   # ── 5. Build and start with docker compose ─────────────────────────────────
   log "Building and starting containers (project: ${proj})..."
   log "This may take a while for the first build..."
 
+  local compose_args=(-p "$proj" -f "${worktree}/${COMPOSE_FILE}")
+  if [[ -f "${worktree}/docker-compose.preview.yml" ]]; then
+    compose_args+=(-f "${worktree}/docker-compose.preview.yml")
+  fi
+
   docker compose \
-    -p "$proj" \
-    -f "${worktree}/${COMPOSE_FILE}" \
+    "${compose_args[@]}" \
     --project-directory "$worktree" \
     up -d --build --wait --wait-timeout "$HEALTHCHECK_TIMEOUT"
 
