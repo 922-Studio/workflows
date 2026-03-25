@@ -34,10 +34,18 @@ on:
         type: string
         default: "prod"
         description: "Target environment (dev or prod)"
+      image:
+        required: false
+        type: string
+        description: "Registry image to pull (e.g. registry.922-studio.com/drafter:dev). When provided, skips build and does docker compose pull + up."
     secrets:
       PAT_GITHUB:
         required: false
         description: "Personal Access Token for private repos (optional)"
+      REGISTRY_USERNAME:
+        required: false
+      REGISTRY_PASSWORD:
+        required: false
 
 jobs:
   deploy:
@@ -55,6 +63,7 @@ jobs:
           echo "Working Directory: ${{ inputs.working_directory || 'repository root' }}"
           echo "Boot Script: ${{ inputs.boot_script || 'none (using default docker compose steps)' }}"
           echo "Pull Code: ${{ inputs.pull_code }}"
+          echo "Registry Image: ${{ inputs.image || 'none (using local build)' }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
 
@@ -166,7 +175,7 @@ jobs:
       # --- Default docker compose path (no boot_script) ---
 
       - name: Stop existing containers
-        if: inputs.boot_script == ''
+        if: inputs.boot_script == '' && inputs.image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🛑 Stopping existing containers..."
@@ -182,7 +191,7 @@ jobs:
         continue-on-error: true
 
       - name: Deploy with zero-downtime rolling update
-        if: inputs.boot_script == ''
+        if: inputs.boot_script == '' && inputs.image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🚀 Deploying with rolling update (zero downtime)..."
@@ -199,7 +208,57 @@ jobs:
           fi
 
       - name: Clean up old images
-        if: inputs.boot_script == ''
+        if: inputs.boot_script == '' && inputs.image == ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🧹 Removing dangling images..."
+          docker image prune -f || true
+          echo "✅ Cleanup completed"
+        continue-on-error: true
+
+      # --- Registry pull path (image input provided) ---
+
+      - name: Registry login
+        if: inputs.image != ''
+        run: |
+          echo "🔐 Logging in to Docker registry..."
+          REGISTRY=$(echo "${{ inputs.image }}" | cut -d'/' -f1)
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+          echo "✅ Registry login successful"
+
+      - name: Pull image from registry
+        if: inputs.image != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "📥 Pulling image: ${{ inputs.image }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+
+          if [ -n "${{ inputs.service_name }}" ]; then
+            docker compose -f ${{ inputs.docker_compose_file }} pull ${{ inputs.service_name }}
+          else
+            docker compose -f ${{ inputs.docker_compose_file }} pull
+          fi
+          echo "✅ Image pull completed"
+
+      - name: Deploy pulled image
+        if: inputs.image != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          echo "🚀 Deploying pulled image..."
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+
+          if [ -n "${{ inputs.service_name }}" ]; then
+            echo "Deploying service: ${{ inputs.service_name }}"
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --wait --wait-timeout 120 --no-deps ${{ inputs.service_name }}
+            echo "✅ Service deployed and healthy"
+          else
+            echo "Deploying all services..."
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --wait --wait-timeout 120
+            echo "✅ All services deployed and healthy"
+          fi
+
+      - name: Clean up old images (registry pull)
+        if: inputs.image != ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🧹 Removing dangling images..."

@@ -201,11 +201,46 @@ def isolate_external_services(config: dict) -> dict:
     return config
 
 
+def apply_prebuilt_image(config: dict, prebuilt_image: str) -> dict:
+    """Replace all build: sections with a fixed image reference.
+
+    When a pre-built image is provided (e.g. from a prior build job in the
+    pipeline), there is no need to re-build from source.  Every service that
+    previously had a ``build:`` directive is updated to use the supplied image
+    instead.  Services that already declare an ``image:`` without a ``build:``
+    (e.g. postgres, redis) are left unchanged.
+    """
+    services = config.get("services", {})
+    patched = []
+
+    for name, svc in services.items():
+        if "build" in svc:
+            svc.pop("build")
+            svc["image"] = prebuilt_image
+            patched.append(name)
+
+    if patched:
+        print(f"  replaced build: with image: {prebuilt_image} for services: {', '.join(patched)}")
+    else:
+        print("  no build: sections found; --prebuilt-image had no effect")
+
+    return config
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate isolated smoke compose config")
     parser.add_argument("--compose-file", required=True, help="Source compose file")
     parser.add_argument("--output", required=True, help="Output file path")
     parser.add_argument("--project", required=True, help="Smoke project name for volume prefixing")
+    parser.add_argument(
+        "--prebuilt-image",
+        default=None,
+        help=(
+            "Pre-built image to use instead of building from source "
+            "(e.g. registry.922-studio.com/drafter:dev-v1.2.3). "
+            "Replaces all 'build:' sections in the compose config."
+        ),
+    )
     args = parser.parse_args()
 
     print(f"Reading compose config from: {args.compose_file}")
@@ -213,6 +248,10 @@ def main() -> None:
 
     service_names = list(config.get("services", {}).keys())
     print(f"Found services: {', '.join(service_names)}")
+
+    if args.prebuilt_image:
+        print(f"Applying pre-built image: {args.prebuilt_image}")
+        config = apply_prebuilt_image(config, args.prebuilt_image)
 
     print(f"Isolating config for project: {args.project}")
     isolated = isolate_config(config, args.project)

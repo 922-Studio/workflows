@@ -1,0 +1,273 @@
+name: Docker Build
+
+on:
+  workflow_call:
+    inputs:
+      registry_url:
+        type: string
+        required: true
+        description: "Registry URL (e.g. registry.922-studio.com)"
+      image_name:
+        type: string
+        required: true
+        description: "Image name without registry prefix (e.g. drafter)"
+      tag:
+        type: string
+        required: true
+        description: "Primary image tag (e.g. dev-v1.2.3)"
+      mutable_tag:
+        type: string
+        required: false
+        description: "Mutable tag to also push (e.g. dev, prod). Watchtower watches this tag."
+      build_args:
+        type: string
+        required: false
+        description: "Build args as multiline KEY=VALUE"
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+        description: "Path to Dockerfile relative to context"
+      context:
+        type: string
+        default: "."
+        description: "Docker build context path relative to repository_path"
+      push:
+        type: boolean
+        default: true
+        description: "Push to registry after build (false = build only, for smoke tests)"
+      repository_path:
+        type: string
+        required: true
+        description: "Absolute path to repo on self-hosted runner"
+      pull_code:
+        type: boolean
+        default: false
+        description: "Whether to git pull before building"
+    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_PASSWORD:
+        required: true
+      PAT_GITHUB:
+        required: false
+    outputs:
+      image:
+        description: "Full image reference (registry/name:tag)"
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: "Image digest (sha256:...)"
+        value: ${{ jobs.build.outputs.digest }}
+
+jobs:
+  build:
+    runs-on: self-hosted
+    outputs:
+      image: ${{ steps.set_outputs.outputs.image }}
+      digest: ${{ steps.push_image.outputs.digest }}
+    steps:
+      - name: Log build start
+        run: |
+          echo "=========================================="
+          echo "Starting Docker Build"
+          echo "=========================================="
+          echo "Registry:        ${{ inputs.registry_url }}"
+          echo "Image:           ${{ inputs.image_name }}"
+          echo "Tag:             ${{ inputs.tag }}"
+          echo "Mutable tag:     ${{ inputs.mutable_tag || 'none' }}"
+          echo "Dockerfile:      ${{ inputs.dockerfile }}"
+          echo "Context:         ${{ inputs.context }}"
+          echo "Push:            ${{ inputs.push }}"
+          echo "Repository path: ${{ inputs.repository_path }}"
+          echo "Pull code:       ${{ inputs.pull_code }}"
+          echo "Timestamp:       $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      - name: Configure git credentials
+        if: inputs.pull_code
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          echo "Configuring git credentials..."
+
+          REMOTE_URL=$(git config --get remote.origin.url)
+          echo "Current remote: $REMOTE_URL"
+
+          if [[ "$REMOTE_URL" == https://* ]] && [ -n "${{ secrets.PAT_GITHUB }}" ]; then
+            echo "Configuring HTTPS authentication with PAT..."
+            REPO_PATH=$(echo "$REMOTE_URL" | sed 's|https://github.com/||')
+            git remote set-url origin "https://x-access-token:${{ secrets.PAT_GITHUB }}@github.com/$REPO_PATH"
+            echo "Git credentials configured"
+          elif [[ "$REMOTE_URL" == git@* ]]; then
+            echo "Using SSH authentication (no PAT needed)"
+          else
+            echo "Warning: No authentication configured, git pull may fail for private repos"
+          fi
+
+      - name: Pull latest changes
+        if: inputs.pull_code
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          echo "Pulling latest changes from remote..."
+          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
+          echo "Current commit: $(git rev-parse HEAD)"
+
+          git fetch origin
+          echo "Fetch completed"
+
+          git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
+          echo "Reset to latest commit"
+
+          echo "New commit: $(git rev-parse HEAD)"
+          echo "Last commit message: $(git log -1 --pretty=%B)"
+
+      - name: Clean up git credentials
+        if: always() && inputs.pull_code
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          echo "Cleaning up git credentials..."
+
+          REMOTE_URL=$(git config --get remote.origin.url)
+
+          if [[ "$REMOTE_URL" == *"x-access-token"* ]]; then
+            REPO_PATH=$(echo "$REMOTE_URL" | sed 's|https://x-access-token:.*@github.com/||')
+            git remote set-url origin "https://github.com/$REPO_PATH"
+            echo "Git credentials removed"
+          else
+            echo "No credentials to clean up"
+          fi
+
+      - name: Verify repository path
+        run: |
+          echo "Verifying repository path..."
+          if [ ! -d "${{ inputs.repository_path }}" ]; then
+            echo "ERROR: Repository path does not exist: ${{ inputs.repository_path }}"
+            exit 1
+          fi
+          echo "Repository path verified: ${{ inputs.repository_path }}"
+
+      - name: Docker login
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          echo "Logging in to registry: ${{ inputs.registry_url }}"
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "${{ inputs.registry_url }}" \
+            --username "${{ secrets.REGISTRY_USERNAME }}" \
+            --password-stdin
+          echo "Docker login successful"
+
+      - name: Prepare build args
+        id: prep_build_args
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          BUILD_ARGS_FLAGS=""
+
+          if [ -n "${{ inputs.build_args }}" ]; then
+            echo "Preparing build args..."
+            while IFS= read -r line; do
+              # Skip empty lines and comments
+              [[ -z "$line" || "$line" == \#* ]] && continue
+              BUILD_ARGS_FLAGS="$BUILD_ARGS_FLAGS --build-arg $line"
+              echo "  Added build arg: $(echo "$line" | cut -d= -f1)=***"
+            done <<< "${{ inputs.build_args }}"
+          else
+            echo "No build args provided"
+          fi
+
+          echo "build_args_flags=$BUILD_ARGS_FLAGS" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        id: build_image
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          CONTEXT_PATH="${{ inputs.context }}"
+          DOCKERFILE_PATH="${{ inputs.dockerfile }}"
+
+          echo "Building image: $FULL_IMAGE"
+          echo "Context:        $CONTEXT_PATH"
+          echo "Dockerfile:     $DOCKERFILE_PATH"
+          echo "Timestamp:      $(date '+%Y-%m-%d %H:%M:%S')"
+
+          docker build \
+            -t "$FULL_IMAGE" \
+            -f "$DOCKERFILE_PATH" \
+            ${{ steps.prep_build_args.outputs.build_args_flags }} \
+            "$CONTEXT_PATH"
+
+          echo "Build completed: $FULL_IMAGE"
+          echo "full_image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+          echo "Image reference: $FULL_IMAGE"
+
+      - name: Push image (versioned tag)
+        id: push_image
+        if: inputs.push
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+
+          echo "Pushing: $FULL_IMAGE"
+          docker push "$FULL_IMAGE"
+          echo "Push completed: $FULL_IMAGE"
+
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$FULL_IMAGE" 2>/dev/null | cut -d@ -f2 || echo "")
+          if [ -n "$DIGEST" ]; then
+            echo "Image digest: $DIGEST"
+            echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          else
+            echo "Digest not available after push (will be populated after pull)"
+          fi
+
+      - name: Tag and push mutable tag
+        if: inputs.push && inputs.mutable_tag != ''
+        working-directory: ${{ inputs.repository_path }}
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          MUTABLE_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }}"
+
+          echo "Tagging $FULL_IMAGE as $MUTABLE_IMAGE"
+          docker tag "$FULL_IMAGE" "$MUTABLE_IMAGE"
+
+          echo "Pushing mutable tag: $MUTABLE_IMAGE"
+          docker push "$MUTABLE_IMAGE"
+          echo "Mutable tag push completed: $MUTABLE_IMAGE"
+
+      - name: Docker logout
+        if: always()
+        run: |
+          docker logout "${{ inputs.registry_url }}" || true
+          echo "Docker logout completed"
+
+      - name: Log build success
+        if: success()
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          echo "=========================================="
+          if [ "${{ inputs.push }}" = "true" ]; then
+            echo "BUILD + PUSH SUCCESSFUL"
+          else
+            echo "BUILD SUCCESSFUL (push skipped)"
+          fi
+          echo "=========================================="
+          echo "Image:     $FULL_IMAGE"
+          if [ -n "${{ inputs.mutable_tag }}" ] && [ "${{ inputs.push }}" = "true" ]; then
+            echo "Also pushed as: ${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }}"
+          fi
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      - name: Log build failure
+        if: failure()
+        run: |
+          echo "=========================================="
+          echo "BUILD FAILED"
+          echo "=========================================="
+          echo "Registry:  ${{ inputs.registry_url }}"
+          echo "Image:     ${{ inputs.image_name }}:${{ inputs.tag }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+          echo "Docker system info:"
+          docker system df || true

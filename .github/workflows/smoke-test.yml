@@ -49,6 +49,10 @@ on:
         type: number
         default: 5
         description: 'Delay between healthcheck attempts in seconds'
+      prebuilt_image:
+        required: false
+        type: string
+        description: 'Pre-built image to use instead of building from source (e.g. registry.922-studio.com/drafter:dev-v1.2.3). Replaces build: in compose config.'
       pull_code:
         required: false
         type: boolean
@@ -93,6 +97,7 @@ jobs:
           echo "Expected services: ${{ inputs.expected_services || 'auto-discover' }}"
           echo "Healthcheck endpoints: ${{ inputs.healthcheck_endpoints }}"
           echo "Migration service: ${{ inputs.migration_service || 'none' }}"
+          echo "Pre-built image: ${{ inputs.prebuilt_image || 'none (build from source)' }}"
           echo "Pull code: ${{ inputs.pull_code }}"
           echo "Smoke project: $SMOKE_PROJECT"
           echo "=========================================="
@@ -184,10 +189,16 @@ jobs:
         run: |
           echo "🔧 Generating isolated compose config..."
 
+          PREBUILT_FLAG=""
+          if [ -n "${{ inputs.prebuilt_image }}" ]; then
+            PREBUILT_FLAG="--prebuilt-image ${{ inputs.prebuilt_image }}"
+          fi
+
           python3 "${{ github.workspace }}/.workflows/.github/scripts/generate_smoke_compose.py" \
             --compose-file "${{ inputs.docker_compose_file }}" \
             --output smoke-compose.json \
-            --project "$SMOKE_PROJECT"
+            --project "$SMOKE_PROJECT" \
+            $PREBUILT_FLAG
 
           echo "smoke_compose=smoke-compose.json" >> $GITHUB_OUTPUT
 
@@ -206,6 +217,7 @@ jobs:
           echo "services=$SERVICES" >> $GITHUB_OUTPUT
 
       - name: 🏗️ Build smoke images
+        if: inputs.prebuilt_image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🏗️ Building images for smoke test..."
@@ -430,6 +442,32 @@ jobs:
             exit 1
           fi
           echo "✅ All HTTP health endpoints responding"
+
+      - name: ✅ Verify migration success pattern
+        if: inputs.migration_service != '' && inputs.migration_success_pattern != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          SVC="${{ inputs.migration_service }}"
+          PATTERN="${{ inputs.migration_success_pattern }}"
+
+          echo "✅ Verifying migration success for service: $SVC"
+          echo "   Pattern: $PATTERN"
+          echo ""
+
+          LOGS=$(docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json logs --tail=500 "$SVC" 2>&1)
+
+          if echo "$LOGS" | grep -q "$PATTERN"; then
+            echo "✅ Migration success pattern found in $SVC logs"
+            echo ""
+            echo "Matching lines:"
+            echo "$LOGS" | grep "$PATTERN" || true
+          else
+            echo "❌ Migration success pattern '$PATTERN' NOT found in $SVC logs"
+            echo ""
+            echo "📋 Last 50 lines of $SVC logs:"
+            echo "$LOGS" | tail -50
+            exit 1
+          fi
 
       - name: 📊 Smoke test summary
         id: summary
