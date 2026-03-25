@@ -253,6 +253,14 @@ cmd_start() {
   fi
 
   mkdir -p "$WORKTREE_BASE"
+
+  # Clean up leftover worktree from a previous failed run
+  if [[ -d "$worktree" ]]; then
+    warn "Leftover worktree found at ${worktree} — removing"
+    git -C "$REPO_PATH" worktree remove --force "$worktree" 2>/dev/null || true
+    rm -rf "$worktree"
+  fi
+
   log "Creating worktree at: ${worktree}"
   git -C "$REPO_PATH" worktree add --detach "$worktree" "$full_ref"
   ok "Worktree created from ${full_ref}"
