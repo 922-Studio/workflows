@@ -326,13 +326,30 @@ EOF
 
   if [[ -n "$first_service" ]]; then
     local override_file="${worktree}/docker-compose.preview.yml"
-    cat > "$override_file" <<EOF
+    local router="${PROJECT_NAME}-pr-${pr}"
+    # Discover all Traefik router names from the base compose so we can strip
+    # auth middlewares. The override merges labels, so we must explicitly clear
+    # the middlewares label for any router that uses forward-auth.
+    local middleware_labels
+    middleware_labels=$(docker compose -f "${worktree}/${COMPOSE_FILE}" --project-directory "$worktree" config 2>/dev/null \
+      | grep -oP 'traefik\.http\.routers\.[^.]+\.middlewares' | sort -u || true)
+
+    {
+      cat <<EOF
 services:
   ${first_service}:
     ports:
       - "${port}:${CONTAINER_PORT}"
+    labels:
+      # PR preview: disable auth middlewares so all routes are publicly accessible
 EOF
-    ok "Compose override created: port ${port} → 3000 (service: ${first_service})"
+      # Clear each auth middleware label found in the base compose
+      for label in $middleware_labels; do
+        echo "      - \"${label}=\""
+      done
+    } > "$override_file"
+
+    ok "Compose override created: port ${port} → ${CONTAINER_PORT}, auth disabled (service: ${first_service})"
   else
     warn "Could not detect service name — skipping port override"
   fi
