@@ -261,6 +261,9 @@ cmd_start() {
     rm -rf "$worktree"
   fi
 
+  # Prune stale worktree entries (registered but directory missing)
+  git -C "$REPO_PATH" worktree prune
+
   log "Creating worktree at: ${worktree}"
   git -C "$REPO_PATH" worktree add --detach "$worktree" "$full_ref"
   ok "Worktree created from ${full_ref}"
