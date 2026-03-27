@@ -235,11 +235,8 @@ jobs:
           docker push "$MUTABLE_IMAGE"
           echo "Mutable tag push completed: $MUTABLE_IMAGE"
 
-      - name: Docker logout
-        if: always()
-        run: |
-          docker logout "${{ inputs.registry_url }}" || true
-          echo "Docker logout completed"
+      # NOTE: No docker logout — self-hosted runner shares credentials with
+      # Watchtower via ~/.docker/config.json. Logging out breaks auto-deploy.
 
       - name: Log build success
         if: success()
