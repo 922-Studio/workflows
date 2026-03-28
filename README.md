@@ -43,6 +43,21 @@ Runs a Node.js frontend test suite (Vitest) on a self-hosted runner with local d
 ### 9. Cancel Previous Runs
 Cancels any in-progress or queued runs of the same workflow on the same branch when a new run starts, preventing redundant CI work on rapid pushes.
 
+### 10. Python Lint
+Runs ruff check and ruff format on Python projects on a self-hosted runner. Supports configurable working directories and Python versions.
+
+### 11. Python Tests
+Runs a Python test suite (pytest) on a self-hosted runner with Allure result uploads, optional coverage reporting via Prometheus Pushgateway, and failure notifications via email or Discord.
+
+### 12. Frontend E2E Tests
+Runs end-to-end tests (Playwright) for frontend projects on a self-hosted runner. Triggered via `workflow_dispatch` so E2E runs are decoupled from the main deployment pipeline.
+
+### 13. Docker Build
+Builds and pushes a Docker image to the self-hosted registry. Supports custom Dockerfile paths, build args, and image tagging strategies.
+
+### 14. Create Issue
+Creates a GitHub issue when a CI workflow fails, capturing the workflow run URL, branch, and commit SHA for traceability.
+
 ## Usage
 
 To use this workflow in your own repository, create a new workflow file (e.g., `.github/workflows/release.yml`) with the following content:
