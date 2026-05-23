@@ -87,7 +87,7 @@ on:
 jobs:
   deploy-preview:
     name: Deploy PR Preview
-    runs-on: self-hosted
+    runs-on: polaris
     if: inputs.action == 'start'
 
     steps:
@@ -255,7 +255,7 @@ jobs:
 
   cleanup-preview:
     name: Cleanup PR Preview
-    runs-on: self-hosted
+    runs-on: polaris
     if: inputs.action == 'stop'
 
     steps:

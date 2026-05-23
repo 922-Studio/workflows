@@ -49,7 +49,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: polaris
     steps:
       - name: Log deployment start
         run: |

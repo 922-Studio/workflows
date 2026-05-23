@@ -41,7 +41,7 @@ on:
       allure_server_url:
         required: false
         type: string
-        default: 'http://home-lab:5050'
+        default: 'http://astro-antares:5050'
         description: 'Base URL of the Allure results server (e.g. allure-docker-service)'
       allure_project_id:
         required: false
@@ -61,8 +61,8 @@ on:
       runner:
         required: false
         type: string
-        default: '["self-hosted"]'
-        description: 'JSON array of runner labels (e.g. "[\"self-hosted\",\"e2e\"]" to target the dedicated E2E runner)'
+        default: '["polaris"]'
+        description: 'JSON array of runner labels (e.g. "[\"polaris\",\"e2e\"]" to target the dedicated E2E runner)'
     secrets:
       ALLURE_TOKEN:
         required: false
