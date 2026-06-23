@@ -3,10 +3,6 @@ name: Smoke Test (Docker Compose)
 on:
   workflow_call:
     inputs:
-      repository_path:
-        required: false
-        type: string
-        description: 'DEPRECATED — ignored; repo is checked out automatically into $GITHUB_WORKSPACE'
       docker_compose_file:
         required: false
         type: string
@@ -53,11 +49,6 @@ on:
         required: false
         type: string
         description: 'Pre-built image to use instead of building from source (e.g. registry.922-studio.com/drafter:dev-v1.2.3). Replaces build: in compose config.'
-      pull_code:
-        required: false
-        type: boolean
-        default: true
-        description: 'DEPRECATED — no-op; code is always fetched via actions/checkout'
       env_file_source:
         required: false
         type: string

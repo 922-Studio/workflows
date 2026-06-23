@@ -35,14 +35,6 @@ on:
         type: boolean
         default: true
         description: "Push to registry after build (false = build only, for smoke tests)"
-      repository_path:
-        type: string
-        required: false
-        description: 'DEPRECATED — ignored; repo is checked out automatically into $GITHUB_WORKSPACE'
-      pull_code:
-        type: boolean
-        default: false
-        description: "DEPRECATED — no-op; code is always fetched via actions/checkout"
     secrets:
       REGISTRY_USERNAME:
         required: true

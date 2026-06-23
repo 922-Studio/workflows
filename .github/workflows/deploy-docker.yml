@@ -3,10 +3,6 @@ name: Deploy Docker Service
 on:
   workflow_call:
     inputs:
-      repository_path:
-        required: false
-        type: string
-        description: 'DEPRECATED — ignored; repo is checked out automatically into $GITHUB_WORKSPACE'
       docker_compose_file:
         required: false
         type: string
@@ -24,11 +20,6 @@ on:
         required: false
         type: string
         description: "Path to a boot/deploy script relative to repository root (optional, replaces default docker compose stop/up/cleanup steps)"
-      pull_code:
-        required: false
-        type: boolean
-        default: true
-        description: "DEPRECATED — no-op; code is always fetched via actions/checkout"
       environment:
         required: false
         type: string
