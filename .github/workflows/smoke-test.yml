@@ -62,7 +62,7 @@ on:
         required: false
         type: string
         default: 'self-hosted'
-        description: 'Runner label to target (e.g. "self-hosted" or "home-lab"). Use a specific label to pin the job to the host that has the deployment directory.'
+        description: 'Runner label to target (e.g. "self-hosted" or "astro-antares"). Use a specific label to pin the job to the host that has the deployment directory.'
     secrets:
       PAT_GITHUB:
         required: false

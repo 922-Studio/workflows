@@ -41,7 +41,7 @@ on:
       allure_server_url:
         required: false
         type: string
-        default: 'http://home-lab:5050'
+        default: 'http://astro-antares:5050'
         description: 'Base URL of the Allure results server (e.g. allure-docker-service)'
       allure_project_id:
         required: false
