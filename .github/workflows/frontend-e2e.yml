@@ -57,7 +57,7 @@ on:
         required: false
         type: string
         default: ''
-        description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
+        description: 'Remote path on astro-antares to fetch the .env file from (e.g. /home/lab/MyProject/.env). Fetched via SCP into app-code/.env.'
       runner:
         required: false
         type: string
@@ -122,13 +122,17 @@ jobs:
           fetch-depth: 0
           path: app-code
 
-      # ── Copy .env from runner ────────────────────────────────────────────────
-      - name: Copy .env from runner
+      # ── Fetch .env from antares via SCP ─────────────────────────────────────
+      - name: Fetch .env from antares via SCP
         if: inputs.env_file_source != ''
         run: |
-          echo "📋 Copying .env from ${{ inputs.env_file_source }}..."
-          cp "${{ inputs.env_file_source }}" app-code/.env
-          echo "✅ .env file copied into workspace."
+          ENV_SOURCE="${{ inputs.env_file_source }}"
+          echo "📋 Fetching .env from lab@astro-antares:${ENV_SOURCE}..."
+          scp -o StrictHostKeyChecking=accept-new \
+            -i /home/lab/.ssh/id_ed25519 \
+            "lab@astro-antares:${ENV_SOURCE}" \
+            app-code/.env
+          echo "✅ Fetched .env into app-code/.env from antares"
 
       # ── Resolve effective app directory ──────────────────────────────────────
       - name: Resolve effective app directory
