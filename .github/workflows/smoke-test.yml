@@ -52,7 +52,7 @@ on:
       env_file_source:
         required: false
         type: string
-        description: 'Remote path on astro-antares to fetch the .env file from (e.g. /home/lab/MyProject/.env). Fetched via SCP into the working directory as .env.smoke.'
+        description: 'Remote path on astro-antares to fetch the .env file from (e.g. /home/lab/MyProject/.env). Fetched via SCP into the working directory as .env.'
       runner:
         required: false
         type: string
@@ -119,11 +119,16 @@ jobs:
         run: |
           ENV_SOURCE="${{ inputs.env_file_source }}"
           echo "📋 Fetching .env from lab@astro-antares:${ENV_SOURCE}..."
+          # Land it as .env (not .env.smoke): `docker compose config` in the next
+          # step validates each service's `env_file: .env` and auto-loads .env for
+          # ${VAR} interpolation. A differently-named file would fail that resolve
+          # ("env file .env not found") before generate_smoke_compose.py can strip
+          # env_file directives. The checkout is ephemeral, so writing .env is safe.
           scp -o StrictHostKeyChecking=accept-new \
             -i /home/lab/.ssh/id_ed25519 \
             "lab@astro-antares:${ENV_SOURCE}" \
-            .env.smoke
-          echo "✅ Fetched .env.smoke from antares"
+            .env
+          echo "✅ Fetched .env from antares"
 
       - name: 🔍 Verify docker compose file
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
@@ -478,6 +483,6 @@ jobs:
           # Remove any dangling images left behind by the build
           docker image prune -f --filter "label=com.docker.compose.project=$SMOKE_PROJECT" 2>/dev/null || true
 
-          rm -f smoke-compose.json .env.smoke 2>/dev/null || true
+          rm -f smoke-compose.json .env 2>/dev/null || true
           rm -rf "${{ github.workspace }}/.workflows" 2>/dev/null || true
           echo "✅ Smoke stack cleaned up (containers, volumes, and images removed)"
