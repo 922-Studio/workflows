@@ -20,11 +20,11 @@ on:
 
 jobs:
   version:
-    runs-on: self-hosted
+    runs-on: polaris
     permissions:
       contents: write
     outputs:
-      new_version: ${{ steps.version.outputs.new_version }}
+      new_version: ${{ steps.resolve.outputs.new_version }}
     steps:
       - name: 🧹 Clean stale git worktrees
         run: |
@@ -39,6 +39,11 @@ jobs:
         with:
           path: app-code
           token: ${{ secrets.PAT_GITHUB }}
+          # Full history + tags so version/tag computation is deterministic on a
+          # fresh runner. A shallow, tag-less checkout hides existing tags, which
+          # makes the tag-existence guard below miss them and push a duplicate tag.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Checkout Workflow Scripts
         uses: actions/checkout@v5
@@ -184,3 +189,34 @@ jobs:
             git push origin "v${{ steps.version.outputs.new_version }}"
             echo "✅ Tag created and pushed."
           fi
+
+      # Always emit a usable version. The "Determine next version" step is skipped
+      # whenever the triggering commit carries [ci skip] (e.g. a workflow_dispatch
+      # re-run on top of a "chore: Update version" bump commit) or when there are no
+      # new commits. In those cases steps.version.outputs.new_version is empty, which
+      # callers interpolate into image tags as "<env>-v" (malformed). Fall back to the
+      # current version.txt — and, only if that is missing, to the latest existing
+      # semver tag — so the output is always a real version and tags stay well-formed.
+      - name: Resolve output version
+        id: resolve
+        working-directory: ./app-code
+        run: |
+          if [ -n "${{ steps.version.outputs.new_version }}" ]; then
+            RESOLVED="${{ steps.version.outputs.new_version }}"
+            echo "✅ Using freshly determined version: $RESOLVED"
+          else
+            RESOLVED="$(tr -d '[:space:]' < version.txt 2>/dev/null || true)"
+            if [ -n "$RESOLVED" ]; then
+              echo "ℹ️ No version bump this run (ci skip / no new commits); using current version.txt: $RESOLVED"
+            else
+              # version.txt missing or empty — fall back to the latest existing semver tag
+              # (full tag history is available because the checkout uses fetch-tags: true).
+              RESOLVED="$(git tag --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 | sed 's/^v//')"
+              echo "ℹ️ version.txt missing/empty; falling back to latest tag: ${RESOLVED:-<none>}"
+            fi
+          fi
+          if [ -z "$RESOLVED" ]; then
+            echo "❌ Could not resolve a version (no bump, no version.txt, no tags)." >&2
+            exit 1
+          fi
+          echo "new_version=$RESOLVED" >> "$GITHUB_OUTPUT"

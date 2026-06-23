@@ -10,12 +10,17 @@
 # Configuration (via environment variables):
 #   PROJECT_NAME        (required) — e.g. "drafter"
 #   REPO_PATH           (required) — absolute path to repo on server, e.g. "/home/lab/Drafter"
-#   PORT_BASE           (optional, default: 9100) — preview port = PORT_BASE + PR_NUMBER
+#   PORT_BASE           (optional, default: 9100) — preview port = PORT_BASE + (PR_NUMBER % PORT_RANGE)
+#   PORT_RANGE          (optional, default: 100)  — port range before wrapping (PR 100 reuses port of PR 0)
 #   MAX_DEMOS           (optional, default: 5)    — max concurrent previews allowed
 #   COMPOSE_FILE        (optional, default: "docker-compose.yaml") — compose file to use
-#   TAILSCALE_IP        (optional, default: "100.112.171.16") — IP for URL output
+#   PREVIEW_DOMAIN      (optional) — domain pattern for public preview, e.g. "922-studio.com"
+#                         When set, generates URL: {PROJECT_NAME}-pr-{N}.{PREVIEW_DOMAIN}
+#                         When unset, falls back to http://{TAILSCALE_IP}:{port}
+#   TAILSCALE_IP        (optional, default: "100.112.171.16") — fallback IP when PREVIEW_DOMAIN is not set
 #   HEALTHCHECK_PATH    (optional, default: "/api/health") — path to verify container is up
 #   HEALTHCHECK_TIMEOUT (optional, default: 60) — seconds to wait for healthy container
+#   CONTAINER_PORT      (optional, default: 3000) — internal container port to map to the preview port
 #
 # State is tracked via /tmp/{PROJECT_NAME}-pr-state/ (one JSON file per PR).
 # Git worktrees live at /tmp/{PROJECT_NAME}-pr/pr-{number}.
@@ -30,11 +35,14 @@ set -euo pipefail
 : "${REPO_PATH:?REPO_PATH is required (e.g. /home/lab/Drafter)}"
 
 PORT_BASE="${PORT_BASE:-9100}"
+PORT_RANGE="${PORT_RANGE:-100}"
 MAX_DEMOS="${MAX_DEMOS:-5}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yaml}"
+PREVIEW_DOMAIN="${PREVIEW_DOMAIN:-}"
 TAILSCALE_IP="${TAILSCALE_IP:-100.112.171.16}"
 HEALTHCHECK_PATH="${HEALTHCHECK_PATH:-/api/health}"
 HEALTHCHECK_TIMEOUT="${HEALTHCHECK_TIMEOUT:-60}"
+CONTAINER_PORT="${CONTAINER_PORT:-3000}"
 
 WORKTREE_BASE="/tmp/${PROJECT_NAME}-pr"
 STATE_DIR="/tmp/${PROJECT_NAME}-pr-state"
@@ -51,8 +59,51 @@ die()  { echo -e "${RED}✗${RST} $*" >&2; exit 1; }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-# Compute the preview port for a given PR number
-preview_port() { echo $((PORT_BASE + $1)); }
+# Compute the preview port for a given PR number (wraps at PORT_RANGE)
+preview_port() { echo $(( PORT_BASE + ($1 % PORT_RANGE) )); }
+
+# Build the public preview URL for a given PR number
+preview_url() {
+  local pr=$1 port=$2
+  if [[ -n "$PREVIEW_DOMAIN" ]]; then
+    echo "https://${PROJECT_NAME}-pr-${pr}.${PREVIEW_DOMAIN}"
+  else
+    echo "http://${TAILSCALE_IP}:${port}"
+  fi
+}
+
+# Build the public hostname for Traefik routing
+preview_hostname() {
+  local pr=$1
+  echo "${PROJECT_NAME}-pr-${pr}.${PREVIEW_DOMAIN}"
+}
+
+# Check if a port is available (not bound by another process)
+check_port_available() {
+  local port=$1 pr=$2
+  # Check if any OTHER PR demo is using this port (port collision from wrapping)
+  for f in "${STATE_DIR}"/pr-*.json; do
+    [[ -f "$f" ]] || continue
+    local existing_pr; existing_pr=$(basename "$f" | sed 's/pr-\([0-9]*\)\.json/\1/')
+    [[ "$existing_pr" == "$pr" ]] && continue  # skip self
+    local existing_port
+    existing_port=$(grep -o '"port": *[0-9]*' "$f" 2>/dev/null | grep -o '[0-9]*$' || echo "0")
+    if [[ "$existing_port" == "$port" ]]; then
+      local proj; proj=$(compose_proj "$existing_pr")
+      if docker compose -p "$proj" ps -q 2>/dev/null | grep -q .; then
+        die "PORT_CONFLICT: Port ${port} is already in use by PR #${existing_pr} (port wrapping collision). Stop PR #${existing_pr} first."
+      else
+        # Stale state — clean it up
+        warn "Cleaning up stale state for PR #${existing_pr} on port ${port}"
+        cleanup_demo "$existing_pr"
+      fi
+    fi
+  done
+  # Also check if port is bound by a non-demo process
+  if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
+    die "PORT_IN_USE: Port ${port} is already bound by another process on this server."
+  fi
+}
 
 # Path helpers
 state_file()   { echo "${STATE_DIR}/pr-${1}.json"; }
@@ -77,6 +128,7 @@ count_running() {
 # Write metadata to the state file for a given PR
 write_state() {
   local pr=$1 branch=$2 port=$3
+  local url; url=$(preview_url "$pr" "$port")
   mkdir -p "$STATE_DIR"
   cat > "$(state_file "$pr")" <<EOF
 {
@@ -84,7 +136,7 @@ write_state() {
   "branch": "$branch",
   "port": $port,
   "project": "$(compose_proj "$pr")",
-  "url": "http://${TAILSCALE_IP}:${port}",
+  "url": "$url",
   "started_at": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 }
 EOF
@@ -123,20 +175,37 @@ cleanup_demo() {
 
 # Wait for the healthcheck endpoint to respond, up to HEALTHCHECK_TIMEOUT seconds
 wait_for_health() {
-  local port=$1
-  local url="http://localhost:${port}${HEALTHCHECK_PATH}"
-  local deadline=$(( $(date +%s) + HEALTHCHECK_TIMEOUT ))
-
-  log "Waiting for health at ${url} (timeout: ${HEALTHCHECK_TIMEOUT}s)"
-  while [[ $(date +%s) -lt $deadline ]]; do
-    local code
-    code=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")
-    if [[ "$code" =~ ^[2-3][0-9]{2}$ ]]; then
-      ok "Container healthy (HTTP $code)"
-      return 0
-    fi
-    sleep 2
-  done
+  local port=$1 pr=$2
+  local url
+  if [[ -n "$PREVIEW_DOMAIN" ]]; then
+    # Traefik-routed: hit localhost with Host header so Traefik can route it
+    local hostname; hostname=$(preview_hostname "$pr")
+    url="http://localhost${HEALTHCHECK_PATH}"
+    log "Waiting for health via Traefik (Host: ${hostname}, timeout: ${HEALTHCHECK_TIMEOUT}s)"
+    local deadline=$(( $(date +%s) + HEALTHCHECK_TIMEOUT ))
+    while [[ $(date +%s) -lt $deadline ]]; do
+      local code
+      code=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: ${hostname}" "$url" 2>/dev/null || echo "000")
+      if [[ "$code" =~ ^[2-3][0-9]{2}$ ]]; then
+        ok "Container healthy (HTTP $code)"
+        return 0
+      fi
+      sleep 2
+    done
+  else
+    url="http://localhost:${port}${HEALTHCHECK_PATH}"
+    log "Waiting for health at ${url} (timeout: ${HEALTHCHECK_TIMEOUT}s)"
+    local deadline=$(( $(date +%s) + HEALTHCHECK_TIMEOUT ))
+    while [[ $(date +%s) -lt $deadline ]]; do
+      local code
+      code=$(curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")
+      if [[ "$code" =~ ^[2-3][0-9]{2}$ ]]; then
+        ok "Container healthy (HTTP $code)"
+        return 0
+      fi
+      sleep 2
+    done
+  fi
 
   warn "Container did not respond within ${HEALTHCHECK_TIMEOUT}s (last code: ${code:-000})"
   return 1
@@ -166,6 +235,9 @@ cmd_start() {
     cleanup_demo "$pr"
   fi
 
+  # ── 2b. Check port availability (handles wrapping collisions) ────────────
+  check_port_available "$port" "$pr"
+
   # ── 3. Create git worktree from PR branch ─────────────────────────────────
   log "Fetching latest refs from origin..."
   git -C "$REPO_PATH" fetch --quiet origin 2>/dev/null || warn "Fetch failed — using local refs"
@@ -181,6 +253,17 @@ cmd_start() {
   fi
 
   mkdir -p "$WORKTREE_BASE"
+
+  # Clean up leftover worktree from a previous failed run
+  if [[ -d "$worktree" ]]; then
+    warn "Leftover worktree found at ${worktree} — removing"
+    git -C "$REPO_PATH" worktree remove --force "$worktree" 2>/dev/null || true
+    rm -rf "$worktree"
+  fi
+
+  # Prune stale worktree entries (registered but directory missing)
+  git -C "$REPO_PATH" worktree prune
+
   log "Creating worktree at: ${worktree}"
   git -C "$REPO_PATH" worktree add --detach "$worktree" "$full_ref"
   ok "Worktree created from ${full_ref}"
@@ -207,7 +290,20 @@ cmd_start() {
   done
 
   # Append PR-specific overrides
-  cat >> "$env_file" <<EOF
+  if [[ -n "$PREVIEW_DOMAIN" ]]; then
+    local hostname; hostname=$(preview_hostname "$pr")
+    cat >> "$env_file" <<EOF
+
+# ── PR Preview Overrides (auto-generated by pr-demo.sh) ──────────────────────
+APP_PORT=${port}
+CONTAINER_NAME=${PROJECT_NAME}_pr_${pr}
+ROUTER_NAME=${PROJECT_NAME}-pr-${pr}
+# Traefik enabled — public subdomain routing via ${hostname}
+TRAEFIK_ENABLE=true
+TRAEFIK_HOST=${hostname}
+EOF
+  else
+    cat >> "$env_file" <<EOF
 
 # ── PR Preview Overrides (auto-generated by pr-demo.sh) ──────────────────────
 APP_PORT=${port}
@@ -217,24 +313,66 @@ ROUTER_NAME=${PROJECT_NAME}-pr-${pr}
 TRAEFIK_ENABLE=false
 TRAEFIK_HOST=pr-${pr}.preview.local
 EOF
+  fi
 
   ok ".env prepared for PR #${pr}"
+
+  # ── 4b. Create compose override for port mapping ───────────────────────────
+  # The project compose file may not expose ports (relying on Traefik). For
+  # previews we need a host port mapping so the container is directly accessible.
+  # Discover the first service name and generate an override file in the worktree.
+  local first_service
+  first_service=$(docker compose -f "${worktree}/${COMPOSE_FILE}" --project-directory "$worktree" config --services 2>/dev/null | head -1)
+
+  if [[ -n "$first_service" ]]; then
+    local override_file="${worktree}/docker-compose.preview.yml"
+    local router="${PROJECT_NAME}-pr-${pr}"
+    # Discover all Traefik router names from the base compose so we can strip
+    # auth middlewares. The override merges labels, so we must explicitly clear
+    # the middlewares label for any router that uses forward-auth.
+    local middleware_labels
+    middleware_labels=$(docker compose -f "${worktree}/${COMPOSE_FILE}" --project-directory "$worktree" config 2>/dev/null \
+      | grep -oP 'traefik\.http\.routers\.[^.]+\.middlewares' | sort -u || true)
+
+    {
+      cat <<EOF
+services:
+  ${first_service}:
+    ports:
+      - "${port}:${CONTAINER_PORT}"
+    labels:
+      # PR preview: disable auth middlewares so all routes are publicly accessible
+EOF
+      # Clear each auth middleware label found in the base compose
+      for label in $middleware_labels; do
+        echo "      - \"${label}=\""
+      done
+    } > "$override_file"
+
+    ok "Compose override created: port ${port} → ${CONTAINER_PORT}, auth disabled (service: ${first_service})"
+  else
+    warn "Could not detect service name — skipping port override"
+  fi
 
   # ── 5. Build and start with docker compose ─────────────────────────────────
   log "Building and starting containers (project: ${proj})..."
   log "This may take a while for the first build..."
 
+  local compose_args=(-p "$proj" -f "${worktree}/${COMPOSE_FILE}")
+  if [[ -f "${worktree}/docker-compose.preview.yml" ]]; then
+    compose_args+=(-f "${worktree}/docker-compose.preview.yml")
+  fi
+
   docker compose \
-    -p "$proj" \
-    -f "${worktree}/${COMPOSE_FILE}" \
+    "${compose_args[@]}" \
     --project-directory "$worktree" \
     up -d --build --wait --wait-timeout "$HEALTHCHECK_TIMEOUT"
 
   ok "Containers started"
 
   # ── 6. Verify healthcheck and report URL ──────────────────────────────────
-  local url="http://${TAILSCALE_IP}:${port}"
-  if wait_for_health "$port"; then
+  local url; url=$(preview_url "$pr" "$port")
+  if wait_for_health "$port" "$pr"; then
     write_state "$pr" "$branch" "$port"
     ok "Preview live for PR #${pr}"
     echo ""
