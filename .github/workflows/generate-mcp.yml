@@ -56,7 +56,7 @@ on:
 
 jobs:
   generate-mcp:
-    runs-on: self-hosted
+    runs-on: polaris
     steps:
       - name: Log generation start
         run: |

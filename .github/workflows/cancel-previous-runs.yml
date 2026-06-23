@@ -5,7 +5,7 @@ on:
 
 jobs:
   cancel:
-    runs-on: self-hosted
+    runs-on: polaris
     permissions:
       actions: write
     steps:

@@ -84,7 +84,7 @@ on:
 
 jobs:
   notify:
-    runs-on: self-hosted
+    runs-on: polaris
     steps:
       - name: Checkout Workflow Scripts
         uses: actions/checkout@v5
