@@ -291,6 +291,8 @@ jobs:
       # ── Preserve Playwright artifacts on failure ─────────────────────────────
       - name: Upload Playwright traces & screenshots (on failure)
         if: failure()
+        # Non-fatal: don't let an artifact-quota error mask the real e2e failure.
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: playwright-artifacts
@@ -301,6 +303,8 @@ jobs:
       # ── Archive raw allure results ────────────────────────────────────────────
       - name: Upload Allure results as artifact (backup)
         if: always()
+        # Non-fatal: redundant backup (results already pushed to the Allure server).
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: allure-e2e-results

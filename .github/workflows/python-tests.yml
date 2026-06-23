@@ -270,9 +270,16 @@ jobs:
 
       - name: Upload coverage and allure results as artifacts
         if: success() || failure()
+        # Non-fatal: this GitHub artifact is a redundant copy — Allure results are
+        # also pushed to the external Allure server and coverage to Pushgateway
+        # (steps below). When the account-wide Actions artifact-storage quota is
+        # exhausted this upload errors, and we must not fail an otherwise-green
+        # test job over a disposable backup.
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: test-results
+          retention-days: 7
           path: |
             app-code/${{ inputs.allure_results_dir }}
             app-code/reports/coverage.xml

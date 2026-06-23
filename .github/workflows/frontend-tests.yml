@@ -335,9 +335,14 @@ jobs:
 
       - name: Upload test artifacts (if present)
         if: always()
+        # Non-fatal: redundant backup (Allure results also go to the external
+        # Allure server, coverage to Pushgateway below). Don't fail a green test
+        # job when the account-wide artifact-storage quota is exhausted.
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: test-results-${{ inputs.allure_project_id }}
+          retention-days: 7
           path: |
             ${{ steps.paths.outputs.app_dir }}/reports/junit.xml
             ${{ steps.paths.outputs.app_dir }}/reports/cobertura-coverage.xml
