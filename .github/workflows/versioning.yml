@@ -39,6 +39,11 @@ jobs:
         with:
           path: app-code
           token: ${{ secrets.PAT_GITHUB }}
+          # Full history + tags so version/tag computation is deterministic on a
+          # fresh runner. A shallow, tag-less checkout hides existing tags, which
+          # makes the tag-existence guard below miss them and push a duplicate tag.
+          fetch-depth: 0
+          fetch-tags: true
 
       - name: Checkout Workflow Scripts
         uses: actions/checkout@v5
