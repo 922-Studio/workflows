@@ -29,6 +29,15 @@ on:
         required: false
         type: string
         description: "Registry image to pull (e.g. registry.922-studio.com/drafter:dev). When provided, skips build and does docker compose pull + up."
+      deploy_target:
+        required: false
+        type: string
+        default: "antares"
+        description: "Target server whose Docker daemon boots the containers: antares (default) | polaris | upsilon. Sets DOCKER_HOST to ssh://lab@astro-<target> (polaris = the local runner daemon)."
+      env_file_source:
+        required: false
+        type: string
+        description: "Absolute path on the deploy_target host to a .env file, fetched via SCP into the working directory as .env before compose runs. Required for services whose compose relies on an untracked .env (e.g. CONTAINER_PREFIX/IMAGE_TAG) so a dev deploy does not fall back to prod defaults."
     secrets:
       PAT_GITHUB:
         required: false
@@ -53,8 +62,20 @@ jobs:
           echo "Working Directory: ${{ inputs.working_directory || 'repository root' }}"
           echo "Boot Script: ${{ inputs.boot_script || 'none (using default docker compose steps)' }}"
           echo "Registry Image: ${{ inputs.image || 'none (using local build)' }}"
+          echo "Deploy Target: ${{ inputs.deploy_target }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
+
+      - name: Resolve deploy target (DOCKER_HOST)
+        id: target
+        run: |
+          case "${{ inputs.deploy_target }}" in
+            polaris) DH="" ;;                          # local runner daemon (polaris)
+            upsilon) DH="ssh://lab@astro-upsilon" ;;
+            antares|*) DH="ssh://lab@astro-antares" ;; # default
+          esac
+          echo "docker_host=$DH" >> "$GITHUB_OUTPUT"
+          echo "🎯 deploy_target='${{ inputs.deploy_target }}' -> DOCKER_HOST='${DH:-<local polaris daemon>}'"
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -94,10 +115,26 @@ jobs:
           echo "📄 File contents preview:"
           head -n 20 "$COMPOSE_FILE"
 
+      - name: Fetch .env from target host via SCP
+        if: inputs.env_file_source != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          ENV_SOURCE="${{ inputs.env_file_source }}"
+          echo "📋 Fetching .env from lab@astro-${{ inputs.deploy_target }}:${ENV_SOURCE}..."
+          # Land it as .env in the working dir so `docker compose` auto-loads it for
+          # ${VAR} interpolation (CONTAINER_PREFIX, IMAGE_TAG, ports, Traefik host).
+          # Without this a dev deploy would fall back to the compose prod defaults.
+          # The checkout is ephemeral, so writing .env here is safe.
+          scp -o StrictHostKeyChecking=accept-new \
+            -i /home/lab/.ssh/id_ed25519 \
+            "lab@astro-${{ inputs.deploy_target }}:${ENV_SOURCE}" \
+            .env
+          echo "✅ .env fetched"
+
       - name: Show current container status
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "📊 Current container status:"
           if [ -n "${{ inputs.service_name }}" ]; then
@@ -113,7 +150,7 @@ jobs:
         if: inputs.boot_script == '' && inputs.image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "🛑 Stopping existing containers..."
 
@@ -131,7 +168,7 @@ jobs:
         if: inputs.boot_script == '' && inputs.image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "🚀 Deploying with rolling update (zero downtime)..."
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -150,7 +187,7 @@ jobs:
         if: inputs.boot_script == '' && inputs.image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "🧹 Removing dangling images..."
           docker image prune -f || true
@@ -171,7 +208,7 @@ jobs:
         if: inputs.image != ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "📥 Pulling image: ${{ inputs.image }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -187,7 +224,7 @@ jobs:
         if: inputs.image != ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "🚀 Deploying pulled image..."
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -206,7 +243,7 @@ jobs:
         if: inputs.image != ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "🧹 Removing dangling images..."
           docker image prune -f || true
@@ -238,21 +275,25 @@ jobs:
       - name: Verify deployment
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "✅ Verifying deployment status..."
 
           if [ -n "${{ inputs.service_name }}" ]; then
-            echo "Checking service: ${{ inputs.service_name }}"
+            echo "Checking service(s): ${{ inputs.service_name }}"
             docker compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }}
 
-            STATUS=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} | xargs docker inspect -f '{{.State.Status}}' 2>/dev/null || echo "unknown")
-            echo "Container status: $STATUS"
-
-            if [ "$STATUS" != "running" ]; then
-              echo "❌ ERROR: Container is not running!"
+            # service_name may be space-separated (e.g. "api worker beat"); check each
+            # container individually so a multi-line status never falsely fails.
+            NOT_RUNNING=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} \
+              | xargs -r docker inspect -f '{{.Name}} {{.State.Status}}' 2>/dev/null \
+              | grep -v ' running$' || true)
+            if [ -n "$NOT_RUNNING" ]; then
+              echo "❌ ERROR: one or more containers are not running:"
+              echo "$NOT_RUNNING"
               exit 1
             fi
+            echo "All target containers are running."
           else
             echo "Checking all services:"
             docker compose -f ${{ inputs.docker_compose_file }} ps
@@ -263,7 +304,7 @@ jobs:
       - name: Show container logs
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "📋 Recent container logs:"
           if [ -n "${{ inputs.service_name }}" ]; then
@@ -276,7 +317,7 @@ jobs:
         if: failure()
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
-          DOCKER_HOST: ssh://lab@astro-antares
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "=========================================="
           echo "❌ DEPLOYMENT FAILED"
