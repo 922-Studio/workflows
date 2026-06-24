@@ -59,7 +59,7 @@ Caller repo's `e2e.yml` is `workflow_dispatch`-only and calls `frontend-e2e.yml@
 - **Consumer tests**: pytest / Vitest invoked via `python-tests.yml` / `frontend-tests.yml`; Allure reporting with configurable coverage threshold.
 
 ## Documentation
-- **Where**: `README.md`, `docs/` (versioning, deploy-docker, send-email, smoke-test, generate-mcp, pr-demo), `.planning/codebase/`.
+- **Where**: `README.md`, `docs/` (versioning, deploy-docker, send-email, smoke-test, generate-mcp), `.planning/codebase/`.
 - **Update rule**: Update docs whenever a workflow's `inputs`/`outputs`/`secrets` contract changes.
 
 ## Pipeline & Deployment
@@ -72,7 +72,7 @@ Caller repo's `e2e.yml` is `workflow_dispatch`-only and calls `frontend-e2e.yml@
 - No upstream deps. Every other 922-Studio project depends on this repo for CI/CD — breaking changes ripple ecosystem-wide; bump cautiously and pin via tag/SHA when needed.
 
 ## Notes
-- 14 reusable workflows: cancel-previous-runs, versioning, python-lint, python-tests, smoke-test, deploy-docker, frontend-tests, frontend-e2e, docker-build, generate-mcp, create-issue, send-notification, pr-demo.
+- 13 reusable workflows: cancel-previous-runs, versioning, python-lint, python-tests, smoke-test, deploy-docker, frontend-tests, frontend-e2e, docker-build, generate-mcp, create-issue, send-notification.
 - Defaults: Node 20.x, Python 3.13, Allure at `http://home-lab:5050`.
 - All workflows require self-hosted runners.
 
