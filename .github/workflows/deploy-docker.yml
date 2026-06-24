@@ -280,16 +280,20 @@ jobs:
           echo "✅ Verifying deployment status..."
 
           if [ -n "${{ inputs.service_name }}" ]; then
-            echo "Checking service: ${{ inputs.service_name }}"
+            echo "Checking service(s): ${{ inputs.service_name }}"
             docker compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }}
 
-            STATUS=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} | xargs docker inspect -f '{{.State.Status}}' 2>/dev/null || echo "unknown")
-            echo "Container status: $STATUS"
-
-            if [ "$STATUS" != "running" ]; then
-              echo "❌ ERROR: Container is not running!"
+            # service_name may be space-separated (e.g. "api worker beat"); check each
+            # container individually so a multi-line status never falsely fails.
+            NOT_RUNNING=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} \
+              | xargs -r docker inspect -f '{{.Name}} {{.State.Status}}' 2>/dev/null \
+              | grep -v ' running$' || true)
+            if [ -n "$NOT_RUNNING" ]; then
+              echo "❌ ERROR: one or more containers are not running:"
+              echo "$NOT_RUNNING"
               exit 1
             fi
+            echo "All target containers are running."
           else
             echo "Checking all services:"
             docker compose -f ${{ inputs.docker_compose_file }} ps
