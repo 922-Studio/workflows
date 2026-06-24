@@ -286,6 +286,11 @@ jobs:
 
       - name: Upload Allure results to external server
         if: success() || failure()
+        # Reporting is best-effort: never fail or stall a green test job on the
+        # external Allure server. timeout-minutes caps a hung upload (the
+        # default job timeout is 6h); continue-on-error keeps the job green.
+        timeout-minutes: 5
+        continue-on-error: true
         env:
           # Use app-code/<dir> so the script sees the real path
           ALLURE_RESULTS_DIR: app-code/${{ inputs.allure_results_dir }}
