@@ -99,9 +99,13 @@ The workflow runs on a self-hosted runner and requires:
 
 1. **Python 3.12+** with `python3-venv` package
 2. **mcp-generator-3.x** (auto-installed on first run)
-3. **Support files** — `api_client_httpx.py` and `patch_api_methods.py` — are tracked in this
-   repo under `scripts/` and are automatically copied into the generator directory by the
-   workflow on every run. No manual placement required.
+3. **Support files** — tracked in this repo under `scripts/`, auto-copied into the generator
+   directory on every run (no manual placement):
+   - `api_client_httpx.py` + `patch_api_methods.py` — legacy stub-patch, applied only if the
+     generator still emits empty `pass` stubs. Newer generator builds (openapi-py-fetch) emit a
+     working httpx client, so this is skipped automatically.
+   - `patch_middleware_org.py` — injects the `X-Org-ID` header into the stdio middleware (always
+     applied; org-scoped endpoints like finance/ledger return 403 without it).
 
 ### First-Time Setup
 
@@ -117,15 +121,14 @@ python3 -m venv .venv && source .venv/bin/activate && pip install -e .
 ### Org-Scoped APIs (`X-Org-ID`)
 
 Some endpoints (e.g. HomeAPI finance/ledger) require an `X-Org-ID` header to scope requests to an
-organisation. The MCP middleware reads this from the `HOMEAPI_ORG_ID` environment variable at
-runtime. Two ways to set it:
+organisation. Without it they return `403`. Two pieces make this work:
 
-- **Pipeline**: pass `org_id: '<uuid>'` in the workflow call — it is baked into `run.sh` as a
-  fallback default.
-- **Override at runtime**: `export HOMEAPI_ORG_ID=<uuid>` before invoking `run.sh` (takes precedence).
-
-The existing run.sh on antares was hand-patched with this line; from this workflow version onward
-it is injected automatically whenever `org_id` is non-empty.
+1. **Middleware patch** (`patch_middleware_org.py`): rewrites the generated stdio client to pass
+   `header_name="X-Org-ID", header_value=os.getenv("HOMEAPI_ORG_ID")`. Applied automatically on
+   every run. This replaces the old hand-patch on antares.
+2. **`HOMEAPI_ORG_ID` env var**: read by the patched middleware at runtime. Set it via:
+   - **Pipeline**: pass `org_id: '<uuid>'` in the workflow call — baked into `run.sh` as a default.
+   - **Runtime override**: `export HOMEAPI_ORG_ID=<uuid>` before invoking `run.sh` (takes precedence).
 
 ## Output Structure
 
