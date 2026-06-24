@@ -46,6 +46,11 @@ on:
         type: number
         default: 30
         description: "Seconds to wait for API health check before failing"
+      org_id:
+        required: false
+        type: string
+        default: ""
+        description: "Default org UUID to inject into run.sh as HOMEAPI_ORG_ID (org-scoped endpoints need this header). Leave empty to skip."
     secrets:
       AUTH_EMAIL:
         required: false
@@ -58,6 +63,13 @@ jobs:
   generate-mcp:
     runs-on: self-hosted
     steps:
+      - name: Checkout workflows repo (for support scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: _workflows
+
       - name: Log generation start
         run: |
           echo "=========================================="
@@ -101,24 +113,24 @@ jobs:
 
       - name: Ensure support files exist
         run: |
-          echo "🔧 Checking support files..."
+          echo "🔧 Installing support files from workflows repo..."
           GENERATOR_DIR="${{ inputs.generator_dir }}"
 
-          # api_client_httpx.py — real httpx-based API client replacing generated stubs
-          if [ ! -f "$GENERATOR_DIR/api_client_httpx.py" ]; then
-            echo "❌ Missing api_client_httpx.py in $GENERATOR_DIR"
-            echo "   This file must be placed manually once. See docs/generate-mcp.md"
+          # Support files are tracked in 922-Studio/workflows scripts/ directory.
+          # Copy from the checked-out runner workspace so the pipeline is self-contained
+          # and never requires manual file placement.
+          SCRIPT_DIR="${GITHUB_WORKSPACE}/_workflows/scripts"
+
+          if [ ! -f "$SCRIPT_DIR/api_client_httpx.py" ] || [ ! -f "$SCRIPT_DIR/patch_api_methods.py" ]; then
+            echo "❌ Support files missing from 922-Studio/workflows scripts/ directory."
+            echo "   Expected: scripts/api_client_httpx.py and scripts/patch_api_methods.py"
             exit 1
           fi
 
-          # patch_api_methods.py — patches stub methods to call api_client.call_api()
-          if [ ! -f "$GENERATOR_DIR/patch_api_methods.py" ]; then
-            echo "❌ Missing patch_api_methods.py in $GENERATOR_DIR"
-            echo "   This file must be placed manually once. See docs/generate-mcp.md"
-            exit 1
-          fi
+          cp "$SCRIPT_DIR/api_client_httpx.py" "$GENERATOR_DIR/api_client_httpx.py"
+          cp "$SCRIPT_DIR/patch_api_methods.py" "$GENERATOR_DIR/patch_api_methods.py"
 
-          echo "✅ Support files present"
+          echo "✅ Support files installed from repo"
 
       - name: Wait for API health
         run: |
@@ -290,10 +302,15 @@ jobs:
 
           # Only create if it doesn't exist (preserve custom changes)
           if [ ! -f "$OUTPUT_DIR/run.sh" ]; then
+            ORG_LINE=""
+            if [ -n "${{ inputs.org_id }}" ]; then
+              ORG_LINE='export HOMEAPI_ORG_ID="${HOMEAPI_ORG_ID:-${{ inputs.org_id }}}"'
+            fi
             cat > "$OUTPUT_DIR/run.sh" << RUNEOF
           #!/bin/bash
           # MCP server wrapper — loads token and runs via stdio
           export BACKEND_API_TOKEN=\$(cat $OUTPUT_DIR/.api-token 2>/dev/null || echo "")
+          ${ORG_LINE}
           exec $OUTPUT_DIR/.venv/bin/python $OUTPUT_DIR/$ENTRY --transport stdio
           RUNEOF
             chmod +x "$OUTPUT_DIR/run.sh"
