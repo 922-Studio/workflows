@@ -46,6 +46,11 @@ on:
         type: number
         default: 30
         description: "Seconds to wait for API health check before failing"
+      org_id:
+        required: false
+        type: string
+        default: ""
+        description: "Default org UUID to inject into run.sh as HOMEAPI_ORG_ID (org-scoped endpoints need this header). Leave empty to skip."
     secrets:
       AUTH_EMAIL:
         required: false
@@ -58,6 +63,13 @@ jobs:
   generate-mcp:
     runs-on: self-hosted
     steps:
+      - name: Checkout workflows repo (for support scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: 922-Studio/workflows
+          ref: main
+          path: _workflows
+
       - name: Log generation start
         run: |
           echo "=========================================="
@@ -101,24 +113,25 @@ jobs:
 
       - name: Ensure support files exist
         run: |
-          echo "🔧 Checking support files..."
+          echo "🔧 Installing support files from workflows repo..."
           GENERATOR_DIR="${{ inputs.generator_dir }}"
 
-          # api_client_httpx.py — real httpx-based API client replacing generated stubs
-          if [ ! -f "$GENERATOR_DIR/api_client_httpx.py" ]; then
-            echo "❌ Missing api_client_httpx.py in $GENERATOR_DIR"
-            echo "   This file must be placed manually once. See docs/generate-mcp.md"
+          # Support files are tracked in 922-Studio/workflows scripts/ directory.
+          # Copy from the checked-out runner workspace so the pipeline is self-contained
+          # and never requires manual file placement.
+          SCRIPT_DIR="${GITHUB_WORKSPACE}/_workflows/scripts"
+
+          if [ ! -f "$SCRIPT_DIR/api_client_httpx.py" ] || [ ! -f "$SCRIPT_DIR/patch_api_methods.py" ] || [ ! -f "$SCRIPT_DIR/patch_middleware_org.py" ]; then
+            echo "❌ Support files missing from 922-Studio/workflows scripts/ directory."
+            echo "   Expected: scripts/{api_client_httpx.py,patch_api_methods.py,patch_middleware_org.py}"
             exit 1
           fi
 
-          # patch_api_methods.py — patches stub methods to call api_client.call_api()
-          if [ ! -f "$GENERATOR_DIR/patch_api_methods.py" ]; then
-            echo "❌ Missing patch_api_methods.py in $GENERATOR_DIR"
-            echo "   This file must be placed manually once. See docs/generate-mcp.md"
-            exit 1
-          fi
+          cp "$SCRIPT_DIR/api_client_httpx.py" "$GENERATOR_DIR/api_client_httpx.py"
+          cp "$SCRIPT_DIR/patch_api_methods.py" "$GENERATOR_DIR/patch_api_methods.py"
+          cp "$SCRIPT_DIR/patch_middleware_org.py" "$GENERATOR_DIR/patch_middleware_org.py"
 
-          echo "✅ Support files present"
+          echo "✅ Support files installed from repo"
 
       - name: Wait for API health
         run: |
@@ -204,16 +217,28 @@ jobs:
         run: |
           echo "🔧 Patching generated API client..."
           GENERATOR_DIR="${{ inputs.generator_dir }}"
+          API_FILE="$GENERATOR_DIR/generated_openapi/openapi_client/api_client.py"
 
-          # Replace stub api_client.py with httpx implementation
-          cp "$GENERATOR_DIR/api_client_httpx.py" \
-             "$GENERATOR_DIR/generated_openapi/openapi_client/api_client.py"
-          echo "  ✅ Replaced api_client.py with httpx implementation"
+          # Legacy stub-patch path: only applies if the generator still emits empty
+          # `pass` stubs that import from openapi_client.api_client. Newer generator
+          # builds (openapi-py-fetch) already emit a working httpx client and import
+          # ApiClient from the shared package, so this becomes a no-op.
+          if [ -f "$API_FILE" ] && grep -q "def call_api" "$GENERATOR_DIR/generated_openapi/openapi_client/api/"*_api.py 2>/dev/null; then
+            echo "  ℹ️  Generator emitted a working client — skipping legacy stub patch"
+          else
+            cp "$GENERATOR_DIR/api_client_httpx.py" "$API_FILE"
+            source "$GENERATOR_DIR/.venv/bin/activate"
+            python3 "$GENERATOR_DIR/patch_api_methods.py" \
+              "$GENERATOR_DIR/generated_openapi/openapi_client/api"
+            echo "  ✅ Applied legacy stub patch"
+          fi
 
-          # Patch all API method stubs to make real HTTP calls
+          # Inject X-Org-ID header into stdio middleware (org-scoped endpoints 403 without it).
+          # Required regardless of generator version when org_id is configured.
           source "$GENERATOR_DIR/.venv/bin/activate"
-          python3 "$GENERATOR_DIR/patch_api_methods.py" \
-            "$GENERATOR_DIR/generated_openapi/openapi_client/api"
+          python3 "$GENERATOR_DIR/patch_middleware_org.py" \
+            "$GENERATOR_DIR/generated_mcp/middleware/authentication.py" || \
+            echo "  ⚠️  X-Org-ID patch skipped (middleware shape changed)"
 
           # Fix backend URL in middleware (generator defaults to localhost:3001)
           sed -i "s|http://localhost:3001|http://localhost:${{ inputs.api_port }}|g" \
@@ -290,10 +315,15 @@ jobs:
 
           # Only create if it doesn't exist (preserve custom changes)
           if [ ! -f "$OUTPUT_DIR/run.sh" ]; then
+            ORG_LINE=""
+            if [ -n "${{ inputs.org_id }}" ]; then
+              ORG_LINE='export HOMEAPI_ORG_ID="${HOMEAPI_ORG_ID:-${{ inputs.org_id }}}"'
+            fi
             cat > "$OUTPUT_DIR/run.sh" << RUNEOF
           #!/bin/bash
           # MCP server wrapper — loads token and runs via stdio
           export BACKEND_API_TOKEN=\$(cat $OUTPUT_DIR/.api-token 2>/dev/null || echo "")
+          ${ORG_LINE}
           exec $OUTPUT_DIR/.venv/bin/python $OUTPUT_DIR/$ENTRY --transport stdio
           RUNEOF
             chmod +x "$OUTPUT_DIR/run.sh"

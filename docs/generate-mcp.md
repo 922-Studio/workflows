@@ -49,6 +49,7 @@ generate-mcp:
     mcporter_config: '/home/lab/openclaw/workspace/config/mcporter.json'
     auth_url: 'http://localhost:8100'
     health_timeout: 30
+    org_id: ''    # Optional: inject HOMEAPI_ORG_ID into run.sh for org-scoped APIs
   secrets:
     AUTH_EMAIL: ${{ secrets.AUTH_EMAIL }}
     AUTH_PASSWORD: ${{ secrets.AUTH_PASSWORD }}
@@ -67,6 +68,7 @@ generate-mcp:
 | `mcporter_config` | string | no | `/home/lab/openclaw/workspace/config/mcporter.json` | mcporter registration file |
 | `auth_url` | string | no | `""` | Auth service URL (empty = skip auth) |
 | `health_timeout` | number | no | `30` | Seconds to wait for API health |
+| `org_id` | string | no | `""` | Default org UUID for `X-Org-ID` header in run.sh (org-scoped endpoints require this) |
 
 ## Secrets
 
@@ -97,25 +99,36 @@ The workflow runs on a self-hosted runner and requires:
 
 1. **Python 3.12+** with `python3-venv` package
 2. **mcp-generator-3.x** (auto-installed on first run)
-3. **Support files** in `generator_dir`:
-   - `api_client_httpx.py` — httpx-based API client (replaces generated stubs)
-   - `patch_api_methods.py` — patches generated method stubs with real HTTP calls
+3. **Support files** — tracked in this repo under `scripts/`, auto-copied into the generator
+   directory on every run (no manual placement):
+   - `api_client_httpx.py` + `patch_api_methods.py` — legacy stub-patch, applied only if the
+     generator still emits empty `pass` stubs. Newer generator builds (openapi-py-fetch) emit a
+     working httpx client, so this is skipped automatically.
+   - `patch_middleware_org.py` — injects the `X-Org-ID` header into the stdio middleware (always
+     applied; org-scoped endpoints like finance/ledger return 403 without it).
 
 ### First-Time Setup
 
-The generator tool and support files only need to be set up once per server:
+Only the mcp-generator itself needs one-time setup:
 
 ```bash
-# Clone generator
+# Clone generator (done automatically by the workflow if missing, but here for reference)
 git clone https://github.com/quotentiroler/mcp-generator-3.x.git /home/lab/tools/mcp-generator
 cd /home/lab/tools/mcp-generator
 python3 -m venv .venv && source .venv/bin/activate && pip install -e .
-
-# Support files (api_client_httpx.py and patch_api_methods.py)
-# These are already in place if you've run the workflow before.
-# If not, they need to be created manually — see the Planner repo
-# scripts/patch_api_methods.py for reference.
 ```
+
+### Org-Scoped APIs (`X-Org-ID`)
+
+Some endpoints (e.g. HomeAPI finance/ledger) require an `X-Org-ID` header to scope requests to an
+organisation. Without it they return `403`. Two pieces make this work:
+
+1. **Middleware patch** (`patch_middleware_org.py`): rewrites the generated stdio client to pass
+   `header_name="X-Org-ID", header_value=os.getenv("HOMEAPI_ORG_ID")`. Applied automatically on
+   every run. This replaces the old hand-patch on antares.
+2. **`HOMEAPI_ORG_ID` env var**: read by the patched middleware at runtime. Set it via:
+   - **Pipeline**: pass `org_id: '<uuid>'` in the workflow call — baked into `run.sh` as a default.
+   - **Runtime override**: `export HOMEAPI_ORG_ID=<uuid>` before invoking `run.sh` (takes precedence).
 
 ## Output Structure
 
