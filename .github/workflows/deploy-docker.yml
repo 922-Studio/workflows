@@ -3,10 +3,6 @@ name: Deploy Docker Service
 on:
   workflow_call:
     inputs:
-      repository_path:
-        required: true
-        type: string
-        description: "Absolute path to the repository on the self-hosted runner"
       docker_compose_file:
         required: false
         type: string
@@ -19,29 +15,41 @@ on:
       working_directory:
         required: false
         type: string
-        description: "Working directory for docker compose commands (defaults to repository_path)"
+        description: "Subdirectory within the repo where docker compose commands run (defaults to repo root)"
       boot_script:
         required: false
         type: string
-        description: "Path to a boot/deploy script relative to repository_path (optional, replaces default docker compose stop/up/cleanup steps)"
-      pull_code:
-        required: false
-        type: boolean
-        default: true
-        description: "Whether to pull latest code before deploying (default: true). Set to false if a prior step (e.g. smoke-test) already pulled"
+        description: "Path to a boot/deploy script relative to repository root (optional, replaces default docker compose stop/up/cleanup steps)"
       environment:
         required: false
         type: string
         default: "prod"
         description: "Target environment (dev or prod)"
+      image:
+        required: false
+        type: string
+        description: "Registry image to pull (e.g. registry.922-studio.com/drafter:dev). When provided, skips build and does docker compose pull + up."
+      deploy_target:
+        required: false
+        type: string
+        default: "antares"
+        description: "Target server whose Docker daemon boots the containers: antares (default) | polaris | upsilon. Sets DOCKER_HOST to ssh://lab@astro-<target> (polaris = the local runner daemon)."
+      env_file_source:
+        required: false
+        type: string
+        description: "Absolute path on the deploy_target host to a .env file, fetched via SCP into the working directory as .env before compose runs. Required for services whose compose relies on an untracked .env (e.g. CONTAINER_PREFIX/IMAGE_TAG) so a dev deploy does not fall back to prod defaults."
     secrets:
       PAT_GITHUB:
         required: false
         description: "Personal Access Token for private repos (optional)"
+      REGISTRY_USERNAME:
+        required: false
+      REGISTRY_PASSWORD:
+        required: false
 
 jobs:
   deploy:
-    runs-on: self-hosted
+    runs-on: polaris
     steps:
       - name: Log deployment start
         run: |
@@ -49,83 +57,38 @@ jobs:
           echo "Starting Docker Deployment"
           echo "=========================================="
           echo "Environment: ${{ inputs.environment }}"
-          echo "Repository Path: ${{ inputs.repository_path }}"
           echo "Docker Compose File: ${{ inputs.docker_compose_file }}"
           echo "Service Name: ${{ inputs.service_name || 'ALL SERVICES' }}"
           echo "Working Directory: ${{ inputs.working_directory || 'repository root' }}"
           echo "Boot Script: ${{ inputs.boot_script || 'none (using default docker compose steps)' }}"
-          echo "Pull Code: ${{ inputs.pull_code }}"
+          echo "Registry Image: ${{ inputs.image || 'none (using local build)' }}"
+          echo "Deploy Target: ${{ inputs.deploy_target }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
 
-      - name: Configure git credentials
-        if: inputs.pull_code
-        working-directory: ${{ inputs.repository_path }}
+      - name: Resolve deploy target (DOCKER_HOST)
+        id: target
         run: |
-          echo "🔐 Configuring git credentials..."
+          case "${{ inputs.deploy_target }}" in
+            polaris) DH="" ;;                          # local runner daemon (polaris)
+            upsilon) DH="ssh://lab@astro-upsilon" ;;
+            antares|*) DH="ssh://lab@astro-antares" ;; # default
+          esac
+          echo "docker_host=$DH" >> "$GITHUB_OUTPUT"
+          echo "🎯 deploy_target='${{ inputs.deploy_target }}' -> DOCKER_HOST='${DH:-<local polaris daemon>}'"
 
-          # Get current remote URL
-          REMOTE_URL=$(git config --get remote.origin.url)
-          echo "Current remote: $REMOTE_URL"
-
-          # If HTTPS URL and PAT provided, configure credential helper
-          if [[ "$REMOTE_URL" == https://* ]] && [ -n "${{ secrets.PAT_GITHUB }}" ]; then
-            echo "Configuring HTTPS authentication with PAT..."
-
-            # Extract repo path from URL
-            REPO_PATH=$(echo "$REMOTE_URL" | sed 's|https://github.com/||')
-
-            # Set authenticated URL
-            git remote set-url origin "https://x-access-token:${{ secrets.PAT_GITHUB }}@github.com/$REPO_PATH"
-            echo "✅ Git credentials configured"
-          elif [[ "$REMOTE_URL" == git@* ]]; then
-            echo "Using SSH authentication (no PAT needed)"
-          else
-            echo "⚠️  Warning: No authentication configured, git pull may fail for private repos"
-          fi
-
-      - name: Pull latest changes
-        if: inputs.pull_code
-        working-directory: ${{ inputs.repository_path }}
-        run: |
-          echo "📥 Pulling latest changes from remote..."
-          echo "Current branch: $(git rev-parse --abbrev-ref HEAD)"
-          echo "Current commit: $(git rev-parse HEAD)"
-
-          git fetch origin
-          echo "✅ Fetch completed"
-
-          git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
-          echo "✅ Reset to latest commit"
-
-          echo "New commit: $(git rev-parse HEAD)"
-          echo "Last commit message: $(git log -1 --pretty=%B)"
-
-      - name: Clean up git credentials
-        if: always() && inputs.pull_code
-        working-directory: ${{ inputs.repository_path }}
-        run: |
-          echo "🧹 Cleaning up git credentials..."
-
-          # Get current remote URL
-          REMOTE_URL=$(git config --get remote.origin.url)
-
-          # If it contains the token, restore to regular HTTPS URL
-          if [[ "$REMOTE_URL" == *"x-access-token"* ]]; then
-            REPO_PATH=$(echo "$REMOTE_URL" | sed 's|https://x-access-token:.*@github.com/||')
-            git remote set-url origin "https://github.com/$REPO_PATH"
-            echo "✅ Git credentials removed"
-          else
-            echo "No credentials to clean up"
-          fi
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PAT_GITHUB }}
 
       - name: Set working directory
         id: set_workdir
         run: |
           if [ -n "${{ inputs.working_directory }}" ]; then
-            WORKDIR="${{ inputs.repository_path }}/${{ inputs.working_directory }}"
+            WORKDIR="${GITHUB_WORKSPACE}/${{ inputs.working_directory }}"
           else
-            WORKDIR="${{ inputs.repository_path }}"
+            WORKDIR="${GITHUB_WORKSPACE}"
           fi
 
           echo "🔧 Setting working directory: $WORKDIR"
@@ -152,8 +115,26 @@ jobs:
           echo "📄 File contents preview:"
           head -n 20 "$COMPOSE_FILE"
 
+      - name: Fetch .env from target host via SCP
+        if: inputs.env_file_source != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          ENV_SOURCE="${{ inputs.env_file_source }}"
+          echo "📋 Fetching .env from lab@astro-${{ inputs.deploy_target }}:${ENV_SOURCE}..."
+          # Land it as .env in the working dir so `docker compose` auto-loads it for
+          # ${VAR} interpolation (CONTAINER_PREFIX, IMAGE_TAG, ports, Traefik host).
+          # Without this a dev deploy would fall back to the compose prod defaults.
+          # The checkout is ephemeral, so writing .env here is safe.
+          scp -o StrictHostKeyChecking=accept-new \
+            -i /home/lab/.ssh/id_ed25519 \
+            "lab@astro-${{ inputs.deploy_target }}:${ENV_SOURCE}" \
+            .env
+          echo "✅ .env fetched"
+
       - name: Show current container status
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "📊 Current container status:"
           if [ -n "${{ inputs.service_name }}" ]; then
@@ -166,8 +147,10 @@ jobs:
       # --- Default docker compose path (no boot_script) ---
 
       - name: Stop existing containers
-        if: inputs.boot_script == ''
+        if: inputs.boot_script == '' && inputs.image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "🛑 Stopping existing containers..."
 
@@ -182,8 +165,10 @@ jobs:
         continue-on-error: true
 
       - name: Deploy with zero-downtime rolling update
-        if: inputs.boot_script == ''
+        if: inputs.boot_script == '' && inputs.image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "🚀 Deploying with rolling update (zero downtime)..."
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -199,8 +184,66 @@ jobs:
           fi
 
       - name: Clean up old images
-        if: inputs.boot_script == ''
+        if: inputs.boot_script == '' && inputs.image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
+        run: |
+          echo "🧹 Removing dangling images..."
+          docker image prune -f || true
+          echo "✅ Cleanup completed"
+        continue-on-error: true
+
+      # --- Registry pull path (image input provided) ---
+
+      - name: Registry login
+        if: inputs.image != ''
+        run: |
+          echo "🔐 Logging in to Docker registry..."
+          REGISTRY=$(echo "${{ inputs.image }}" | cut -d'/' -f1)
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.REGISTRY_USERNAME }}" --password-stdin
+          echo "✅ Registry login successful"
+
+      - name: Pull image from registry
+        if: inputs.image != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
+        run: |
+          echo "📥 Pulling image: ${{ inputs.image }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+
+          if [ -n "${{ inputs.service_name }}" ]; then
+            docker compose -f ${{ inputs.docker_compose_file }} pull ${{ inputs.service_name }}
+          else
+            docker compose -f ${{ inputs.docker_compose_file }} pull
+          fi
+          echo "✅ Image pull completed"
+
+      - name: Deploy pulled image
+        if: inputs.image != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
+        run: |
+          echo "🚀 Deploying pulled image..."
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+
+          if [ -n "${{ inputs.service_name }}" ]; then
+            echo "Deploying service: ${{ inputs.service_name }}"
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --wait --wait-timeout 120 --no-deps ${{ inputs.service_name }}
+            echo "✅ Service deployed and healthy"
+          else
+            echo "Deploying all services..."
+            docker compose -f ${{ inputs.docker_compose_file }} up -d --wait --wait-timeout 120
+            echo "✅ All services deployed and healthy"
+          fi
+
+      - name: Clean up old images (registry pull)
+        if: inputs.image != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "🧹 Removing dangling images..."
           docker image prune -f || true
@@ -211,7 +254,7 @@ jobs:
 
       - name: Run boot script
         if: inputs.boot_script != ''
-        working-directory: ${{ inputs.repository_path }}
+        working-directory: ${{ github.workspace }}
         run: |
           echo "🚀 Running boot script: ${{ inputs.boot_script }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -223,11 +266,6 @@ jobs:
             exit 1
           fi
 
-          # Pass SKIP_PULL to boot script when pull_code is disabled
-          if [ "${{ inputs.pull_code }}" = "false" ]; then
-            export SKIP_PULL=true
-          fi
-
           chmod +x "$SCRIPT_PATH"
           ./"$SCRIPT_PATH" ${{ inputs.environment }}
           echo "✅ Boot script completed"
@@ -236,20 +274,26 @@ jobs:
 
       - name: Verify deployment
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "✅ Verifying deployment status..."
 
           if [ -n "${{ inputs.service_name }}" ]; then
-            echo "Checking service: ${{ inputs.service_name }}"
+            echo "Checking service(s): ${{ inputs.service_name }}"
             docker compose -f ${{ inputs.docker_compose_file }} ps ${{ inputs.service_name }}
 
-            STATUS=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} | xargs docker inspect -f '{{.State.Status}}' 2>/dev/null || echo "unknown")
-            echo "Container status: $STATUS"
-
-            if [ "$STATUS" != "running" ]; then
-              echo "❌ ERROR: Container is not running!"
+            # service_name may be space-separated (e.g. "api worker beat"); check each
+            # container individually so a multi-line status never falsely fails.
+            NOT_RUNNING=$(docker compose -f ${{ inputs.docker_compose_file }} ps -q ${{ inputs.service_name }} \
+              | xargs -r docker inspect -f '{{.Name}} {{.State.Status}}' 2>/dev/null \
+              | grep -v ' running$' || true)
+            if [ -n "$NOT_RUNNING" ]; then
+              echo "❌ ERROR: one or more containers are not running:"
+              echo "$NOT_RUNNING"
               exit 1
             fi
+            echo "All target containers are running."
           else
             echo "Checking all services:"
             docker compose -f ${{ inputs.docker_compose_file }} ps
@@ -259,6 +303,8 @@ jobs:
 
       - name: Show container logs
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "📋 Recent container logs:"
           if [ -n "${{ inputs.service_name }}" ]; then
@@ -270,6 +316,8 @@ jobs:
       - name: Show logs on failure
         if: failure()
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        env:
+          DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
           echo "=========================================="
           echo "❌ DEPLOYMENT FAILED"

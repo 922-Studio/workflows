@@ -1,0 +1,198 @@
+name: Docker Build
+
+on:
+  workflow_call:
+    inputs:
+      registry_url:
+        type: string
+        required: true
+        description: "Registry URL (e.g. registry.922-studio.com)"
+      image_name:
+        type: string
+        required: true
+        description: "Image name without registry prefix (e.g. drafter)"
+      tag:
+        type: string
+        required: true
+        description: "Primary image tag (e.g. dev-v1.2.3)"
+      mutable_tag:
+        type: string
+        required: false
+        description: "Mutable tag to also push (e.g. dev, prod). Watchtower watches this tag."
+      build_args:
+        type: string
+        required: false
+        description: "Build args as multiline KEY=VALUE"
+      dockerfile:
+        type: string
+        default: "Dockerfile"
+        description: "Path to Dockerfile relative to context"
+      context:
+        type: string
+        default: "."
+        description: "Docker build context path relative to repository root"
+      push:
+        type: boolean
+        default: true
+        description: "Push to registry after build (false = build only, for smoke tests)"
+    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_PASSWORD:
+        required: true
+      PAT_GITHUB:
+        required: false
+    outputs:
+      image:
+        description: "Full image reference (registry/name:tag)"
+        value: ${{ jobs.build.outputs.image }}
+      digest:
+        description: "Image digest (sha256:...)"
+        value: ${{ jobs.build.outputs.digest }}
+
+jobs:
+  build:
+    runs-on: polaris
+    outputs:
+      image: ${{ steps.set_outputs.outputs.image }}
+      digest: ${{ steps.push_image.outputs.digest }}
+    steps:
+      - name: Log build start
+        run: |
+          echo "=========================================="
+          echo "Starting Docker Build"
+          echo "=========================================="
+          echo "Registry:    ${{ inputs.registry_url }}"
+          echo "Image:       ${{ inputs.image_name }}"
+          echo "Tag:         ${{ inputs.tag }}"
+          echo "Mutable tag: ${{ inputs.mutable_tag || 'none' }}"
+          echo "Dockerfile:  ${{ inputs.dockerfile }}"
+          echo "Context:     ${{ inputs.context }}"
+          echo "Push:        ${{ inputs.push }}"
+          echo "Timestamp:   $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PAT_GITHUB }}
+
+      - name: Docker login
+        run: |
+          echo "Logging in to registry: ${{ inputs.registry_url }}"
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "${{ inputs.registry_url }}" \
+            --username "${{ secrets.REGISTRY_USERNAME }}" \
+            --password-stdin
+          echo "Docker login successful"
+
+      - name: Prepare build args
+        id: prep_build_args
+        run: |
+          BUILD_ARGS_FLAGS=""
+
+          if [ -n "${{ inputs.build_args }}" ]; then
+            echo "Preparing build args..."
+            while IFS= read -r line; do
+              # Skip empty lines and comments
+              [[ -z "$line" || "$line" == \#* ]] && continue
+              BUILD_ARGS_FLAGS="$BUILD_ARGS_FLAGS --build-arg $line"
+              echo "  Added build arg: $(echo "$line" | cut -d= -f1)=***"
+            done <<< "${{ inputs.build_args }}"
+          else
+            echo "No build args provided"
+          fi
+
+          echo "build_args_flags=$BUILD_ARGS_FLAGS" >> $GITHUB_OUTPUT
+
+      - name: Build Docker image
+        id: build_image
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          CONTEXT_PATH="${{ inputs.context }}"
+          DOCKERFILE_PATH="${{ inputs.dockerfile }}"
+
+          echo "Building image: $FULL_IMAGE"
+          echo "Context:        $CONTEXT_PATH"
+          echo "Dockerfile:     $DOCKERFILE_PATH"
+          echo "Timestamp:      $(date '+%Y-%m-%d %H:%M:%S')"
+
+          docker build \
+            -t "$FULL_IMAGE" \
+            -f "$DOCKERFILE_PATH" \
+            ${{ steps.prep_build_args.outputs.build_args_flags }} \
+            "$CONTEXT_PATH"
+
+          echo "Build completed: $FULL_IMAGE"
+          echo "full_image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+
+      - name: Set outputs
+        id: set_outputs
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          echo "image=$FULL_IMAGE" >> $GITHUB_OUTPUT
+          echo "Image reference: $FULL_IMAGE"
+
+      - name: Push image (versioned tag)
+        id: push_image
+        if: inputs.push
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+
+          echo "Pushing: $FULL_IMAGE"
+          docker push "$FULL_IMAGE"
+          echo "Push completed: $FULL_IMAGE"
+
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "$FULL_IMAGE" 2>/dev/null | cut -d@ -f2 || echo "")
+          if [ -n "$DIGEST" ]; then
+            echo "Image digest: $DIGEST"
+            echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          else
+            echo "Digest not available after push (will be populated after pull)"
+          fi
+
+      - name: Tag and push mutable tag
+        if: inputs.push && inputs.mutable_tag != ''
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          MUTABLE_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }}"
+
+          echo "Tagging $FULL_IMAGE as $MUTABLE_IMAGE"
+          docker tag "$FULL_IMAGE" "$MUTABLE_IMAGE"
+
+          echo "Pushing mutable tag: $MUTABLE_IMAGE"
+          docker push "$MUTABLE_IMAGE"
+          echo "Mutable tag push completed: $MUTABLE_IMAGE"
+
+      # NOTE: No docker logout — self-hosted runner shares credentials with
+      # Watchtower via ~/.docker/config.json. Logging out breaks auto-deploy.
+
+      - name: Log build success
+        if: success()
+        run: |
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          echo "=========================================="
+          if [ "${{ inputs.push }}" = "true" ]; then
+            echo "BUILD + PUSH SUCCESSFUL"
+          else
+            echo "BUILD SUCCESSFUL (push skipped)"
+          fi
+          echo "=========================================="
+          echo "Image:     $FULL_IMAGE"
+          if [ -n "${{ inputs.mutable_tag }}" ] && [ "${{ inputs.push }}" = "true" ]; then
+            echo "Also pushed as: ${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }}"
+          fi
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+
+      - name: Log build failure
+        if: failure()
+        run: |
+          echo "=========================================="
+          echo "BUILD FAILED"
+          echo "=========================================="
+          echo "Registry:  ${{ inputs.registry_url }}"
+          echo "Image:     ${{ inputs.image_name }}:${{ inputs.tag }}"
+          echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
+          echo "=========================================="
+          echo "Docker system info:"
+          docker system df || true

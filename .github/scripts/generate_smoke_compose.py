@@ -21,8 +21,8 @@ import sys
 from urllib.parse import urlparse
 
 # Hostnames of shared infrastructure that must be replaced with temp services
-EXTERNAL_POSTGRES_HOSTS = {"shared_postgres"}
-EXTERNAL_REDIS_HOSTS = {"shared_redis"}
+EXTERNAL_POSTGRES_HOSTS = {"shared_postgres", "dev_postgres"}
+EXTERNAL_REDIS_HOSTS = {"shared_redis", "dev_redis"}
 
 # Names for injected temporary services
 SMOKE_POSTGRES = "smoke-postgres"
@@ -201,11 +201,83 @@ def isolate_external_services(config: dict) -> dict:
     return config
 
 
+def ensure_ports_exposed(config: dict) -> dict:
+    """Ensure services have published ports for smoke testing.
+
+    In production, services behind Traefik don't need published ports — Traefik
+    routes via Docker network. But in smoke tests, HTTP health checks need to
+    reach containers from the host. This function extracts the container port
+    from Traefik labels and adds a random (0) host port mapping if none exists.
+    """
+    services = config.get("services", {})
+
+    for name, svc in services.items():
+        # Skip if already has ports
+        if svc.get("ports"):
+            continue
+
+        # Look for Traefik loadbalancer port in labels
+        labels = svc.get("labels", {})
+        if isinstance(labels, list):
+            label_dict = {}
+            for label in labels:
+                if isinstance(label, str) and "=" in label:
+                    k, v = label.split("=", 1)
+                    label_dict[k] = v
+            labels = label_dict
+
+        for key, val in labels.items():
+            if "loadbalancer.server.port" in key:
+                container_port = str(val).strip()
+                svc["ports"] = [
+                    {"target": int(container_port), "published": "0", "protocol": "tcp"}
+                ]
+                print(f"  exposed port {container_port} for {name} (from Traefik labels)")
+                break
+
+    return config
+
+
+def apply_prebuilt_image(config: dict, prebuilt_image: str) -> dict:
+    """Replace all build: sections with a fixed image reference.
+
+    When a pre-built image is provided (e.g. from a prior build job in the
+    pipeline), there is no need to re-build from source.  Every service that
+    previously had a ``build:`` directive is updated to use the supplied image
+    instead.  Services that already declare an ``image:`` without a ``build:``
+    (e.g. postgres, redis) are left unchanged.
+    """
+    services = config.get("services", {})
+    patched = []
+
+    for name, svc in services.items():
+        if "build" in svc:
+            svc.pop("build")
+            svc["image"] = prebuilt_image
+            patched.append(name)
+
+    if patched:
+        print(f"  replaced build: with image: {prebuilt_image} for services: {', '.join(patched)}")
+    else:
+        print("  no build: sections found; --prebuilt-image had no effect")
+
+    return config
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate isolated smoke compose config")
     parser.add_argument("--compose-file", required=True, help="Source compose file")
     parser.add_argument("--output", required=True, help="Output file path")
     parser.add_argument("--project", required=True, help="Smoke project name for volume prefixing")
+    parser.add_argument(
+        "--prebuilt-image",
+        default=None,
+        help=(
+            "Pre-built image to use instead of building from source "
+            "(e.g. registry.922-studio.com/drafter:dev-v1.2.3). "
+            "Replaces all 'build:' sections in the compose config."
+        ),
+    )
     args = parser.parse_args()
 
     print(f"Reading compose config from: {args.compose_file}")
@@ -214,11 +286,18 @@ def main() -> None:
     service_names = list(config.get("services", {}).keys())
     print(f"Found services: {', '.join(service_names)}")
 
+    if args.prebuilt_image:
+        print(f"Applying pre-built image: {args.prebuilt_image}")
+        config = apply_prebuilt_image(config, args.prebuilt_image)
+
     print(f"Isolating config for project: {args.project}")
     isolated = isolate_config(config, args.project)
 
     print("Isolating external service references...")
     isolated = isolate_external_services(isolated)
+
+    print("Ensuring container ports are exposed for HTTP health checks...")
+    isolated = ensure_ports_exposed(isolated)
 
     with open(args.output, "w") as f:
         json.dump(isolated, f, indent=2)

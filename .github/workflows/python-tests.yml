@@ -41,7 +41,7 @@ on:
       allure_server_url:
         required: false
         type: string
-        default: 'http://home-lab:5050'
+        default: 'http://astro-antares:5050'
         description: 'Base URL of the Allure results server (e.g. allure-docker-service)'
       allure_project_id:
         required: false
@@ -94,7 +94,7 @@ on:
         required: false
         type: string
         default: ''
-        description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
+        description: 'Remote path on astro-antares to fetch the .env file from (e.g. /home/lab/MyProject/.env). Fetched via SCP into app-code/.env.'
       pushgateway_url:
         required: false
         type: string
@@ -119,7 +119,7 @@ on:
 
 jobs:
   tests:
-    runs-on: self-hosted
+    runs-on: polaris
 
     outputs:
       failed_tests: ${{ steps.test_summary.outputs.failed_tests }}
@@ -162,12 +162,16 @@ jobs:
           fetch-depth: 0
           path: app-code
 
-      - name: Copy .env from runner
+      - name: Fetch .env from antares via SCP
         if: inputs.env_file_source != ''
         run: |
-          echo "📋 Copying .env from ${{ inputs.env_file_source }}..."
-          cp "${{ inputs.env_file_source }}" app-code/.env
-          echo "✅ .env file copied into workspace."
+          ENV_SOURCE="${{ inputs.env_file_source }}"
+          echo "📋 Fetching .env from lab@astro-antares:${ENV_SOURCE}..."
+          scp -o StrictHostKeyChecking=accept-new \
+            -i /home/lab/.ssh/id_ed25519 \
+            "lab@astro-antares:${ENV_SOURCE}" \
+            app-code/.env
+          echo "✅ Fetched .env into app-code/.env from antares"
 
       - name: Set DATABASE_URL from input
         if: inputs.database_url != ''
@@ -266,15 +270,27 @@ jobs:
 
       - name: Upload coverage and allure results as artifacts
         if: success() || failure()
+        # Non-fatal: this GitHub artifact is a redundant copy — Allure results are
+        # also pushed to the external Allure server and coverage to Pushgateway
+        # (steps below). When the account-wide Actions artifact-storage quota is
+        # exhausted this upload errors, and we must not fail an otherwise-green
+        # test job over a disposable backup.
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: test-results
+          retention-days: 7
           path: |
             app-code/${{ inputs.allure_results_dir }}
             app-code/reports/coverage.xml
 
       - name: Upload Allure results to external server
         if: success() || failure()
+        # Reporting is best-effort: never fail or stall a green test job on the
+        # external Allure server. timeout-minutes caps a hung upload (the
+        # default job timeout is 6h); continue-on-error keeps the job green.
+        timeout-minutes: 5
+        continue-on-error: true
         env:
           # Use app-code/<dir> so the script sees the real path
           ALLURE_RESULTS_DIR: app-code/${{ inputs.allure_results_dir }}

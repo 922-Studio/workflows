@@ -1,11 +1,32 @@
 #!/usr/bin/env python
 import json
 import os
+import socket
 import sys
 import uuid
 from pathlib import Path
 from typing import List
 from urllib import parse, request, error
+
+
+# The Allure server hostname (e.g. astro-antares.fritz.box) resolves to both
+# IPv6 and IPv4 addresses, but the lab network only routes IPv4. Python's
+# urllib has no Happy-Eyeballs fallback (unlike curl): it tries each resolved
+# address in order, blocking the *full* socket timeout on every unreachable
+# IPv6 address before falling back to IPv4. With two dead IPv6 records and a
+# 120s timeout that is ~4 min wasted per request — ~1 hour across the batches
+# of a large suite. Force IPv4 resolution so connections hit the working
+# address immediately. Falls back to the original result if no A record exists.
+_ORIG_GETADDRINFO = socket.getaddrinfo
+
+
+def _ipv4_only_getaddrinfo(*args, **kwargs):
+    responses = _ORIG_GETADDRINFO(*args, **kwargs)
+    ipv4 = [r for r in responses if r[0] == socket.AF_INET]
+    return ipv4 or responses
+
+
+socket.getaddrinfo = _ipv4_only_getaddrinfo
 
 
 def log(msg: str) -> None:

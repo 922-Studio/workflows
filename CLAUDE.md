@@ -9,7 +9,7 @@
 ## Tech Stack
 - **Language(s)**: YAML (GitHub Actions), Python 3.13, Bash
 - **Framework(s)**: GitHub Actions `workflow_call` pattern
-- **Infrastructure**: Self-hosted runners on home-lab cluster
+- **Infrastructure**: Self-hosted runners on astro-antares cluster
 - **CI/CD**: None for this repo — it IS the CI/CD
 
 ## Key Files to Read
@@ -73,7 +73,7 @@ Caller repo's `e2e.yml` is `workflow_dispatch`-only and calls `frontend-e2e.yml@
 
 ## Notes
 - 13 reusable workflows: cancel-previous-runs, versioning, python-lint, python-tests, smoke-test, deploy-docker, frontend-tests, frontend-e2e, docker-build, generate-mcp, create-issue, send-notification.
-- Defaults: Node 20.x, Python 3.13, Allure at `http://home-lab:5050`.
+- Defaults: Node 20.x, Python 3.13, Allure at `http://astro-antares:5050`.
 - All workflows require self-hosted runners.
 
 ## New Workflow Checklist

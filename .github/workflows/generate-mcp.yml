@@ -61,7 +61,7 @@ on:
 
 jobs:
   generate-mcp:
-    runs-on: self-hosted
+    runs-on: polaris
     steps:
       - name: Checkout workflows repo (for support scripts)
         uses: actions/checkout@v4

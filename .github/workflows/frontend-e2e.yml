@@ -41,7 +41,7 @@ on:
       allure_server_url:
         required: false
         type: string
-        default: 'http://home-lab:5050'
+        default: 'http://astro-antares:5050'
         description: 'Base URL of the Allure results server (e.g. allure-docker-service)'
       allure_project_id:
         required: false
@@ -57,12 +57,12 @@ on:
         required: false
         type: string
         default: ''
-        description: 'Absolute path to a .env file on the runner to copy into the workspace before tests'
+        description: 'Remote path on astro-antares to fetch the .env file from (e.g. /home/lab/MyProject/.env). Fetched via SCP into app-code/.env.'
       runner:
         required: false
         type: string
-        default: '["self-hosted"]'
-        description: 'JSON array of runner labels (e.g. "[\"self-hosted\",\"e2e\"]" to target the dedicated E2E runner)'
+        default: '["polaris"]'
+        description: 'JSON array of runner labels (e.g. "[\"polaris\",\"e2e\"]" to target the dedicated E2E runner)'
     secrets:
       ALLURE_TOKEN:
         required: false
@@ -122,13 +122,17 @@ jobs:
           fetch-depth: 0
           path: app-code
 
-      # ── Copy .env from runner ────────────────────────────────────────────────
-      - name: Copy .env from runner
+      # ── Fetch .env from antares via SCP ─────────────────────────────────────
+      - name: Fetch .env from antares via SCP
         if: inputs.env_file_source != ''
         run: |
-          echo "📋 Copying .env from ${{ inputs.env_file_source }}..."
-          cp "${{ inputs.env_file_source }}" app-code/.env
-          echo "✅ .env file copied into workspace."
+          ENV_SOURCE="${{ inputs.env_file_source }}"
+          echo "📋 Fetching .env from lab@astro-antares:${ENV_SOURCE}..."
+          scp -o StrictHostKeyChecking=accept-new \
+            -i /home/lab/.ssh/id_ed25519 \
+            "lab@astro-antares:${ENV_SOURCE}" \
+            app-code/.env
+          echo "✅ Fetched .env into app-code/.env from antares"
 
       # ── Resolve effective app directory ──────────────────────────────────────
       - name: Resolve effective app directory
@@ -273,6 +277,11 @@ jobs:
       # ── Upload Allure results to external server ─────────────────────────────
       - name: Upload Allure results to Allure server
         if: always()
+        # Reporting is best-effort: never fail or stall a green test job on the
+        # external Allure server. timeout-minutes caps a hung upload (the
+        # default job timeout is 6h); continue-on-error keeps the job green.
+        timeout-minutes: 5
+        continue-on-error: true
         env:
           ALLURE_RESULTS_DIR: ${{ steps.paths.outputs.app_dir }}/${{ inputs.allure_results_dir }}
           ALLURE_SERVER_URL: ${{ inputs.allure_server_url }}
@@ -287,6 +296,8 @@ jobs:
       # ── Preserve Playwright artifacts on failure ─────────────────────────────
       - name: Upload Playwright traces & screenshots (on failure)
         if: failure()
+        # Non-fatal: don't let an artifact-quota error mask the real e2e failure.
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: playwright-artifacts
@@ -297,6 +308,8 @@ jobs:
       # ── Archive raw allure results ────────────────────────────────────────────
       - name: Upload Allure results as artifact (backup)
         if: always()
+        # Non-fatal: redundant backup (results already pushed to the Allure server).
+        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: allure-e2e-results

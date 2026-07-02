@@ -3,10 +3,6 @@ name: Smoke Test (Docker Compose)
 on:
   workflow_call:
     inputs:
-      repository_path:
-        required: true
-        type: string
-        description: 'Absolute path to the repository on the self-hosted runner'
       docker_compose_file:
         required: false
         type: string
@@ -15,7 +11,7 @@ on:
       working_directory:
         required: false
         type: string
-        description: 'Working directory for docker compose commands (defaults to repository_path)'
+        description: 'Subdirectory within the repo where docker compose commands run (defaults to repo root)'
       expected_services:
         required: false
         type: string
@@ -49,24 +45,23 @@ on:
         type: number
         default: 5
         description: 'Delay between healthcheck attempts in seconds'
-      pull_code:
+      prebuilt_image:
         required: false
-        type: boolean
-        default: true
-        description: 'Whether to pull latest code before building (default: true)'
+        type: string
+        description: 'Pre-built image to use instead of building from source (e.g. registry.922-studio.com/drafter:dev-v1.2.3). Replaces build: in compose config.'
       env_file_source:
         required: false
         type: string
-        description: 'Path to .env file to copy into the working directory for smoke containers (e.g. /home/lab/MyProject/.env)'
+        description: 'Remote path on astro-antares to fetch the .env file from (e.g. /home/lab/MyProject/.env). Fetched via SCP into the working directory as .env.'
       runner:
         required: false
         type: string
-        default: 'self-hosted'
-        description: 'Runner label to target (e.g. "self-hosted" or "home-lab"). Use a specific label to pin the job to the host that has the deployment directory.'
+        default: 'polaris'
+        description: 'Runner label to target (e.g. "polaris").'
     secrets:
       PAT_GITHUB:
         required: false
-        description: 'Personal Access Token for private repos (optional, used for git pull)'
+        description: 'Personal Access Token for private repos'
     outputs:
       result:
         description: 'Smoke test result: "passed" or "failed"'
@@ -87,23 +82,27 @@ jobs:
           echo "=========================================="
           echo "🔬 Smoke Test Configuration"
           echo "=========================================="
-          echo "Repository path: ${{ inputs.repository_path }}"
           echo "Docker compose file: ${{ inputs.docker_compose_file }}"
           echo "Working directory: ${{ inputs.working_directory || 'repository root' }}"
           echo "Expected services: ${{ inputs.expected_services || 'auto-discover' }}"
           echo "Healthcheck endpoints: ${{ inputs.healthcheck_endpoints }}"
           echo "Migration service: ${{ inputs.migration_service || 'none' }}"
-          echo "Pull code: ${{ inputs.pull_code }}"
+          echo "Pre-built image: ${{ inputs.prebuilt_image || 'none (build from source)' }}"
           echo "Smoke project: $SMOKE_PROJECT"
           echo "=========================================="
+
+      - name: 📥 Checkout caller repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.PAT_GITHUB }}
 
       - name: 🔧 Set working directory
         id: set_workdir
         run: |
           if [ -n "${{ inputs.working_directory }}" ]; then
-            WORKDIR="${{ inputs.repository_path }}/${{ inputs.working_directory }}"
+            WORKDIR="${GITHUB_WORKSPACE}/${{ inputs.working_directory }}"
           else
-            WORKDIR="${{ inputs.repository_path }}"
+            WORKDIR="${GITHUB_WORKSPACE}"
           fi
 
           echo "workdir=$WORKDIR" >> $GITHUB_OUTPUT
@@ -114,34 +113,22 @@ jobs:
           fi
           echo "✅ Working directory verified: $WORKDIR"
 
-      - name: 📥 Pull latest code
-        if: inputs.pull_code
-        working-directory: ${{ inputs.repository_path }}
+      - name: 🔑 Fetch .env from antares via SCP
+        if: inputs.env_file_source != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
-          echo "📥 Pulling latest changes..."
-
-          # Configure PAT if provided — first normalize the URL to plain https://github.com/...
-          REMOTE_URL=$(git config --get remote.origin.url)
-          # Strip any existing PAT prefixes (handles corrupted multi-prefix URLs)
-          REPO_PATH=$(echo "$REMOTE_URL" | sed -E 's|https://(x-access-token:[^@]+@)?github\.com/||g')
-          # Restore clean URL before adding PAT
-          git remote set-url origin "https://github.com/$REPO_PATH"
-
-          if [ -n "${{ secrets.PAT_GITHUB }}" ]; then
-            git remote set-url origin "https://x-access-token:${{ secrets.PAT_GITHUB }}@github.com/$REPO_PATH"
-          fi
-
-          git fetch origin
-          git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
-
-          echo "✅ Now at commit: $(git rev-parse --short HEAD)"
-          echo "   $(git log -1 --pretty=%B | head -1)"
-
-          # Clean up credentials
-          if [[ "$(git config --get remote.origin.url)" == *"x-access-token"* ]]; then
-            REPO_PATH=$(echo "$(git config --get remote.origin.url)" | sed 's|https://x-access-token:.*@github.com/||')
-            git remote set-url origin "https://github.com/$REPO_PATH"
-          fi
+          ENV_SOURCE="${{ inputs.env_file_source }}"
+          echo "📋 Fetching .env from lab@astro-antares:${ENV_SOURCE}..."
+          # Land it as .env (not .env.smoke): `docker compose config` in the next
+          # step validates each service's `env_file: .env` and auto-loads .env for
+          # ${VAR} interpolation. A differently-named file would fail that resolve
+          # ("env file .env not found") before generate_smoke_compose.py can strip
+          # env_file directives. The checkout is ephemeral, so writing .env is safe.
+          scp -o StrictHostKeyChecking=accept-new \
+            -i /home/lab/.ssh/id_ed25519 \
+            "lab@astro-antares:${ENV_SOURCE}" \
+            .env
+          echo "✅ Fetched .env from antares"
 
       - name: 🔍 Verify docker compose file
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
@@ -152,18 +139,6 @@ jobs:
             exit 1
           fi
           echo "✅ Docker compose file exists: $COMPOSE_FILE"
-
-      - name: 📋 Copy env file for smoke containers
-        if: inputs.env_file_source != ''
-        working-directory: ${{ steps.set_workdir.outputs.workdir }}
-        run: |
-          SRC="${{ inputs.env_file_source }}"
-          if [ -f "$SRC" ]; then
-            cp "$SRC" .env.smoke
-            echo "✅ Copied env file from $SRC to .env.smoke"
-          else
-            echo "⚠️  Env file not found at $SRC, skipping"
-          fi
 
       - name: 📦 Checkout workflows repo
         uses: actions/checkout@v5
@@ -179,10 +154,16 @@ jobs:
         run: |
           echo "🔧 Generating isolated compose config..."
 
+          PREBUILT_FLAG=""
+          if [ -n "${{ inputs.prebuilt_image }}" ]; then
+            PREBUILT_FLAG="--prebuilt-image ${{ inputs.prebuilt_image }}"
+          fi
+
           python3 "${{ github.workspace }}/.workflows/.github/scripts/generate_smoke_compose.py" \
             --compose-file "${{ inputs.docker_compose_file }}" \
             --output smoke-compose.json \
-            --project "$SMOKE_PROJECT"
+            --project "$SMOKE_PROJECT" \
+            $PREBUILT_FLAG
 
           echo "smoke_compose=smoke-compose.json" >> $GITHUB_OUTPUT
 
@@ -201,6 +182,7 @@ jobs:
           echo "services=$SERVICES" >> $GITHUB_OUTPUT
 
       - name: 🏗️ Build smoke images
+        if: inputs.prebuilt_image == ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         run: |
           echo "🏗️ Building images for smoke test..."
@@ -426,6 +408,32 @@ jobs:
           fi
           echo "✅ All HTTP health endpoints responding"
 
+      - name: ✅ Verify migration success pattern
+        if: inputs.migration_service != '' && inputs.migration_success_pattern != ''
+        working-directory: ${{ steps.set_workdir.outputs.workdir }}
+        run: |
+          SVC="${{ inputs.migration_service }}"
+          PATTERN="${{ inputs.migration_success_pattern }}"
+
+          echo "✅ Verifying migration success for service: $SVC"
+          echo "   Pattern: $PATTERN"
+          echo ""
+
+          LOGS=$(docker compose -p "$SMOKE_PROJECT" -f smoke-compose.json logs --tail=500 "$SVC" 2>&1)
+
+          if echo "$LOGS" | grep -q "$PATTERN"; then
+            echo "✅ Migration success pattern found in $SVC logs"
+            echo ""
+            echo "Matching lines:"
+            echo "$LOGS" | grep "$PATTERN" || true
+          else
+            echo "❌ Migration success pattern '$PATTERN' NOT found in $SVC logs"
+            echo ""
+            echo "📋 Last 50 lines of $SVC logs:"
+            echo "$LOGS" | tail -50
+            exit 1
+          fi
+
       - name: 📊 Smoke test summary
         id: summary
         if: always()
@@ -475,6 +483,6 @@ jobs:
           # Remove any dangling images left behind by the build
           docker image prune -f --filter "label=com.docker.compose.project=$SMOKE_PROJECT" 2>/dev/null || true
 
-          rm -f smoke-compose.json .env.smoke 2>/dev/null || true
+          rm -f smoke-compose.json .env 2>/dev/null || true
           rm -rf "${{ github.workspace }}/.workflows" 2>/dev/null || true
           echo "✅ Smoke stack cleaned up (containers, volumes, and images removed)"

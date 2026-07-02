@@ -62,7 +62,7 @@ on:
 
 jobs:
   create-issue:
-    runs-on: self-hosted
+    runs-on: polaris
     outputs:
       issue_url: ${{ steps.issue.outputs.issue_url }}
     steps:
