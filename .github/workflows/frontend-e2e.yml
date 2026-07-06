@@ -113,7 +113,7 @@ jobs:
           repository: 922-Studio/workflows
           ref: main
           path: workflow-scripts
-          token: ${{ secrets.PAT_GITHUB }}
+          token: ${{ secrets.PAT_GITHUB || github.token }}
 
       # ── Checkout application code ────────────────────────────────────────────
       - name: Checkout Application Code

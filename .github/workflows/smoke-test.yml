@@ -94,7 +94,7 @@ jobs:
       - name: 📥 Checkout caller repository
         uses: actions/checkout@v5
         with:
-          token: ${{ secrets.PAT_GITHUB }}
+          token: ${{ secrets.PAT_GITHUB || github.token }}
 
       - name: 🔧 Set working directory
         id: set_workdir
@@ -146,7 +146,7 @@ jobs:
           repository: 922-Studio/workflows
           ref: main
           path: .workflows
-          token: ${{ secrets.PAT_GITHUB }}
+          token: ${{ secrets.PAT_GITHUB || github.token }}
 
       - name: 🔧 Generate isolated smoke compose config
         id: generate

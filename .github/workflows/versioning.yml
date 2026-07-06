@@ -38,7 +38,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           path: app-code
-          token: ${{ secrets.PAT_GITHUB }}
+          token: ${{ secrets.PAT_GITHUB || github.token }}
           # Full history + tags so version/tag computation is deterministic on a
           # fresh runner. A shallow, tag-less checkout hides existing tags, which
           # makes the tag-existence guard below miss them and push a duplicate tag.
@@ -51,7 +51,7 @@ jobs:
           repository: 922-Studio/workflows
           ref: main
           path: workflow-scripts
-          token: ${{ secrets.PAT_GITHUB }}
+          token: ${{ secrets.PAT_GITHUB || github.token }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
