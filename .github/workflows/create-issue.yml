@@ -82,7 +82,7 @@ jobs:
       - name: Create issue
         id: issue
         env:
-          GITHUB_TOKEN: ${{ secrets.PAT_GITHUB }}
+          GITHUB_TOKEN: ${{ secrets.PAT_GITHUB || github.token }}
           REPO_FULL_NAME: ${{ inputs.repository_name }}
           JOB_NAME: ${{ inputs.job_name }}
           BRANCH_NAME: ${{ inputs.branch_name }}
