@@ -55,6 +55,8 @@ Runs end-to-end tests (Playwright) for frontend projects on a self-hosted runner
 ### 13. Docker Build
 Builds and pushes a Docker image to the self-hosted registry. Supports custom Dockerfile paths, build args, and image tagging strategies.
 
+Optionally, set `transfer_target` to stream the built image straight into a target host's Docker daemon over ssh (`docker save | DOCKER_HOST=ssh://lab@astro-<target> docker load`) **instead of** pushing to the registry. This bypasses the Cloudflare 100 MB request-body cap that 413s large image layers on registry push. Pair it with `pull_image: false` on the `deploy-docker` step so the deploy uses the locally loaded image (no registry pull). See [SSH image transfer (Cloudflare 413 bypass)](docs/deploy-docker.md#ssh-image-transfer-cloudflare-413-bypass).
+
 ### 14. Create Issue
 Creates a GitHub issue when a CI workflow fails, capturing the workflow run URL, branch, and commit SHA for traceability.
 

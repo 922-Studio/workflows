@@ -60,6 +60,20 @@ jobs:
 - **Description**: Working directory for docker-compose commands, relative to repository_path. Defaults to repository root
 - **Example**: `services/backend`
 
+### `pull_image` (optional)
+- **Type**: `boolean`
+- **Default**: `true`
+- **Description**: Only relevant when `image` is set. When `true` the image is pulled from the registry before `compose up`. Set `false` when the image was already loaded into the target daemon out-of-band (see [SSH image transfer](#ssh-image-transfer-cloudflare-413-bypass)); the registry login + pull are skipped and compose uses the locally present image (default pull policy `missing`).
+
+## SSH image transfer (Cloudflare 413 bypass)
+
+The self-hosted registry (`registry.922-studio.com`) sits behind Cloudflare, which hard-caps request bodies at 100 MB. Large image layers therefore `413 Payload Too Large` on `docker push` from the polaris runners. Since deploys already reach the antares daemon over an ssh bridge (`DOCKER_HOST=ssh://lab@astro-antares`), the registry can be skipped entirely for CI-driven deploys:
+
+1. **Build step** (`docker-build.yml`): set `transfer_target: antares` (with `push: true`). The image is streamed into the target daemon via `docker save <tag> [<mutable_tag>] | DOCKER_HOST=ssh://lab@astro-<target> docker load`. The registry push is skipped. Image layer blobs are already gzip-compressed inside the tar, so no extra compression is applied over the pipe.
+2. **Deploy step** (`deploy-docker.yml`): set `pull_image: false` (with the same `image`/`deploy_target`). The registry login + `compose pull` are skipped; `compose up` uses the image already present in the target daemon.
+
+This uses only the existing ssh bridge — no new secrets. The default registry-push path is unchanged; both flags are opt-in. Services still relying on Watchtower (which watches registry tags) must keep the default registry-push path.
+
 ## Secrets
 
 ### `PAT_GITHUB` (optional)

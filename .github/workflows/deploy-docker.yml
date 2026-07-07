@@ -38,6 +38,18 @@ on:
         required: false
         type: string
         description: "Absolute path on the deploy_target host to a .env file, fetched via SCP into the working directory as .env before compose runs. Required for services whose compose relies on an untracked .env (e.g. CONTAINER_PREFIX/IMAGE_TAG) so a dev deploy does not fall back to prod defaults."
+      pull_image:
+        required: false
+        type: boolean
+        default: true
+        description: >-
+          Only relevant when `image` is set. When true (default) the image is
+          pulled from the registry before `compose up`. Set false when the image
+          was already loaded into the target daemon out-of-band (docker-build.yml
+          `transfer_target` ssh-transfer mode): the registry login + pull are
+          skipped and compose uses the locally present image (default pull policy
+          "missing" is satisfied). Use this to avoid the Cloudflare 100 MB
+          registry cap.
     secrets:
       PAT_GITHUB:
         required: false
@@ -62,6 +74,7 @@ jobs:
           echo "Working Directory: ${{ inputs.working_directory || 'repository root' }}"
           echo "Boot Script: ${{ inputs.boot_script || 'none (using default docker compose steps)' }}"
           echo "Registry Image: ${{ inputs.image || 'none (using local build)' }}"
+          echo "Pull Image: ${{ inputs.pull_image }}"
           echo "Deploy Target: ${{ inputs.deploy_target }}"
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
@@ -197,7 +210,7 @@ jobs:
       # --- Registry pull path (image input provided) ---
 
       - name: Registry login
-        if: inputs.image != ''
+        if: inputs.image != '' && inputs.pull_image
         run: |
           echo "🔐 Logging in to Docker registry..."
           REGISTRY=$(echo "${{ inputs.image }}" | cut -d'/' -f1)
@@ -205,7 +218,7 @@ jobs:
           echo "✅ Registry login successful"
 
       - name: Pull image from registry
-        if: inputs.image != ''
+        if: inputs.image != '' && inputs.pull_image
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
           DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
@@ -220,13 +233,17 @@ jobs:
           fi
           echo "✅ Image pull completed"
 
+      # Runs whether the image was pulled from the registry or pre-loaded via
+      # ssh-transfer (pull_image: false). Compose's default pull policy is
+      # "missing", so a locally present image is used without contacting the
+      # registry.
       - name: Deploy pulled image
         if: inputs.image != ''
         working-directory: ${{ steps.set_workdir.outputs.workdir }}
         env:
           DOCKER_HOST: ${{ steps.target.outputs.docker_host }}
         run: |
-          echo "🚀 Deploying pulled image..."
+          echo "🚀 Deploying image (pull_image=${{ inputs.pull_image }})..."
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
 
           if [ -n "${{ inputs.service_name }}" ]; then
