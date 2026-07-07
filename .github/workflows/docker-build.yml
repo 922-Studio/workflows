@@ -35,11 +35,24 @@ on:
         type: boolean
         default: true
         description: "Push to registry after build (false = build only, for smoke tests)"
+      transfer_target:
+        type: string
+        required: false
+        description: >-
+          Opt-in ssh image transfer. When set, the built image is streamed
+          directly into the target host's Docker daemon via
+          `docker save | DOCKER_HOST=ssh://lab@astro-<target> docker load`
+          INSTEAD of `docker push` to the registry. Bypasses the Cloudflare
+          100 MB request-body cap that 413s large layers on registry push.
+          Values: antares | polaris | upsilon. Leave empty for the default
+          registry-push path. Requires that the deploy step uses the same image
+          tag with `pull_image: false` (the image lives only in the target
+          daemon, not the registry).
     secrets:
       REGISTRY_USERNAME:
-        required: true
+        required: false
       REGISTRY_PASSWORD:
-        required: true
+        required: false
       PAT_GITHUB:
         required: false
     outputs:
@@ -69,6 +82,7 @@ jobs:
           echo "Dockerfile:  ${{ inputs.dockerfile }}"
           echo "Context:     ${{ inputs.context }}"
           echo "Push:        ${{ inputs.push }}"
+          echo "Transfer:    ${{ inputs.transfer_target || 'none (registry push)' }}"
           echo "Timestamp:   $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
 
@@ -78,6 +92,7 @@ jobs:
           token: ${{ secrets.PAT_GITHUB || github.token }}
 
       - name: Docker login
+        if: inputs.transfer_target == ''
         run: |
           echo "Logging in to registry: ${{ inputs.registry_url }}"
           echo "${{ secrets.REGISTRY_PASSWORD }}" | docker login "${{ inputs.registry_url }}" \
@@ -134,7 +149,7 @@ jobs:
 
       - name: Push image (versioned tag)
         id: push_image
-        if: inputs.push
+        if: inputs.push && inputs.transfer_target == ''
         run: |
           FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
 
@@ -151,7 +166,7 @@ jobs:
           fi
 
       - name: Tag and push mutable tag
-        if: inputs.push && inputs.mutable_tag != ''
+        if: inputs.push && inputs.mutable_tag != '' && inputs.transfer_target == ''
         run: |
           FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
           MUTABLE_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }}"
@@ -163,6 +178,39 @@ jobs:
           docker push "$MUTABLE_IMAGE"
           echo "Mutable tag push completed: $MUTABLE_IMAGE"
 
+      # --- SSH image transfer path (registry push bypass) ---
+      # Streams the freshly built image straight into the target host's Docker
+      # daemon over the existing ssh bridge (same one deploy-docker.yml uses via
+      # DOCKER_HOST). No registry, so the Cloudflare 100 MB body cap never
+      # applies. The deploy step must run with `pull_image: false`.
+      - name: Transfer image to target daemon (ssh)
+        if: inputs.push && inputs.transfer_target != ''
+        run: |
+          case "${{ inputs.transfer_target }}" in
+            polaris) DH="" ;;                          # local runner daemon (polaris)
+            upsilon) DH="ssh://lab@astro-upsilon" ;;
+            antares) DH="ssh://lab@astro-antares" ;;
+            *)
+              echo "❌ ERROR: unknown transfer_target '${{ inputs.transfer_target }}' (expected antares|polaris|upsilon)"
+              exit 1
+              ;;
+          esac
+
+          FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
+          IMAGES="$FULL_IMAGE"
+          if [ -n "${{ inputs.mutable_tag }}" ]; then
+            MUTABLE_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }}"
+            echo "Tagging $FULL_IMAGE as $MUTABLE_IMAGE"
+            docker tag "$FULL_IMAGE" "$MUTABLE_IMAGE"
+            IMAGES="$IMAGES $MUTABLE_IMAGE"
+          fi
+
+          echo "📦 Streaming image(s) to '${DH:-<local polaris daemon>}': $IMAGES"
+          # Image layer blobs are already gzip-compressed inside the tar, so an
+          # extra gzip over the pipe buys almost nothing — stream raw.
+          docker save $IMAGES | DOCKER_HOST="$DH" docker load
+          echo "✅ Transfer complete — image present in target daemon (no registry push)"
+
       # NOTE: No docker logout — self-hosted runner shares credentials with
       # Watchtower via ~/.docker/config.json. Logging out breaks auto-deploy.
 
@@ -171,7 +219,9 @@ jobs:
         run: |
           FULL_IMAGE="${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.tag }}"
           echo "=========================================="
-          if [ "${{ inputs.push }}" = "true" ]; then
+          if [ "${{ inputs.push }}" = "true" ] && [ -n "${{ inputs.transfer_target }}" ]; then
+            echo "BUILD + SSH TRANSFER SUCCESSFUL (registry push bypassed)"
+          elif [ "${{ inputs.push }}" = "true" ]; then
             echo "BUILD + PUSH SUCCESSFUL"
           else
             echo "BUILD SUCCESSFUL (push skipped)"
@@ -179,7 +229,11 @@ jobs:
           echo "=========================================="
           echo "Image:     $FULL_IMAGE"
           if [ -n "${{ inputs.mutable_tag }}" ] && [ "${{ inputs.push }}" = "true" ]; then
-            echo "Also pushed as: ${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }}"
+            if [ -n "${{ inputs.transfer_target }}" ]; then
+              echo "Also transferred as: ${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }} -> ${{ inputs.transfer_target }}"
+            else
+              echo "Also pushed as: ${{ inputs.registry_url }}/${{ inputs.image_name }}:${{ inputs.mutable_tag }}"
+            fi
           fi
           echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
           echo "=========================================="
