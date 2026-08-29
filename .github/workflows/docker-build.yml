@@ -10,7 +10,7 @@ on:
       image_name:
         type: string
         required: true
-        description: "Image name without registry prefix (e.g. drafter)"
+        description: "Image name without registry prefix (e.g. homeapi)"
       tag:
         type: string
         required: true

@@ -274,7 +274,7 @@ def main() -> None:
         default=None,
         help=(
             "Pre-built image to use instead of building from source "
-            "(e.g. registry.922-studio.com/drafter:dev-v1.2.3). "
+            "(e.g. registry.922-studio.com/homeapi:dev-v1.2.3). "
             "Replaces all 'build:' sections in the compose config."
         ),
     )
