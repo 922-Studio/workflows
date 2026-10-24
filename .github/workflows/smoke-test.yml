@@ -57,7 +57,7 @@ on:
         required: false
         type: string
         default: 'polaris'
-        description: 'Runner label to target (e.g. "polaris").'
+        description: 'Runner label to target (e.g. "polaris"). Not "ci-light": smoke builds images under dockerd, outside the ci-light memory caps.'
     secrets:
       PAT_GITHUB:
         required: false
