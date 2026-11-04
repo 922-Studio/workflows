@@ -12,11 +12,9 @@ This document provides a detailed explanation of the AI-Powered Versioning workf
 *   **How to create:** You can generate a new API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 *   **How to store:** For security, this key should be stored as a secret in the repository that *uses* this workflow. Navigate to `Settings > Secrets and variables > Actions` and add a new repository secret named `GEMINI_API_KEY`.
 
-### `runs-on` (optional)
+### Runner
 
-*   **Description:** The type of runner to use for the job. You can use this to specify a self-hosted runner.
-*   **Type:** `string`
-*   **Default:** `ubuntu-latest`
+*   The job runs on the self-hosted `polaris` runners. GitHub-hosted labels (`ubuntu-*`, `macos-*`, `windows-*`) are not used anywhere in 922-Studio (OPS-199).
 
 </details>
 
@@ -37,7 +35,7 @@ This document provides a detailed explanation of the AI-Powered Versioning workf
 
       build-and-push-docker:
         needs: version
-        runs-on: ubuntu-latest
+        runs-on: polaris
         steps:
           - name: Build and push Docker image
             uses: docker/build-push-action@v5
