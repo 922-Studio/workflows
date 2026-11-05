@@ -52,6 +52,12 @@ Runs a Python test suite (pytest) on a self-hosted runner (input `runner`; empty
 ### 12. Frontend E2E Tests
 Runs end-to-end tests (Playwright) for frontend projects on a self-hosted runner. Triggered via `workflow_dispatch` so E2E runs are decoupled from the main deployment pipeline.
 
+### Runner lanes
+Runners are split into three lanes. `deploy` (polaris, polaris-2) runs jobs that deploy to the servers (Deploy Docker). `ci-full` (polaris-3, polaris-4; E2E uses `ci-full` + `e2e`) runs heavy CI: tests, E2E, smoke, Docker build, MCP generation, versioning and notifications. `ci-light` (upsilon-standby-1/-2, label `ci-light` only, no node on PATH) runs light jobs whose job id is on the standby allowlist (currently Python Lint). Callers can still override `runner` / `runs_on`; only the defaults changed.
+
+### CI concurrency
+The CI-only workflows (Python Tests, Python Lint, Frontend Tests, Frontend E2E, Smoke Test) set a job-level `concurrency` group of caller workflow + ref + reusable workflow + working/source directory, so sibling calls within one caller run never cancel each other. On `pull_request` events and on `refs/heads/dev` a newer run cancels the superseded one; on every other ref (main, prod) `cancel-in-progress` is off and the run id is appended to the group, so nothing is cancelled or replaced in the queue. Deploy, build, publish, versioning and notification workflows deliberately have no concurrency.
+
 ### 13. Docker Build
 Builds and pushes a Docker image to the self-hosted registry. Supports custom Dockerfile paths, build args, and image tagging strategies.
 

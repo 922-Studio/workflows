@@ -31,12 +31,15 @@ on:
       runs_on:
         required: false
         type: string
-        default: 'ci-full'
+        default: 'ci-light'
         description: 'Runner label (self-hosted only; GitHub-hosted labels are not allowed)'
 
 jobs:
   lint:
     name: Lint (ruff + mypy)
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-python-lint-${{ inputs.source_directory }}${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/dev') && '' || format('-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/dev' }}
     runs-on: ${{ inputs.runs_on }}
     steps:
       - uses: actions/checkout@v5

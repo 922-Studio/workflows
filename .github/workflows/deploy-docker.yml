@@ -61,7 +61,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: ci-full
+    runs-on: deploy
     steps:
       - name: Log deployment start
         run: |

@@ -69,6 +69,9 @@ on:
 
 jobs:
   smoke:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-smoke-test-${{ inputs.working_directory }}${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/dev') && '' || format('-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/dev' }}
     runs-on: ${{ inputs.runner }}
     outputs:
       result: ${{ steps.summary.outputs.result }}
