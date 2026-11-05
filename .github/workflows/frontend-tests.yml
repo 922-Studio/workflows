@@ -112,6 +112,9 @@ on:
 
 jobs:
   tests:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-frontend-tests-${{ inputs.working_directory }}${{ (github.event_name == 'pull_request' || github.ref == 'refs/heads/dev') && '' || format('-{0}', github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/dev' }}
     runs-on: ${{ inputs.runner }}
 
     outputs:
