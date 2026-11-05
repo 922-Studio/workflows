@@ -53,6 +53,14 @@ on:
         type: string
         default: '["gregor160505@gmail.com"]'
         description: 'JSON array of email addresses for failure notifications'
+      runner:
+        required: false
+        type: string
+        default: 'polaris'
+        description: >-
+          Runner label for the test job. 'ci-light' (upsilon + polaris pool) only for
+          suites that fit in 2 GiB RAM and need no env_file_source (antares ssh key is
+          polaris-only); large vitest suites (HomeUI) stay on 'polaris'.
       allure_results_dir:
         required: false
         type: string
@@ -104,7 +112,7 @@ on:
 
 jobs:
   tests:
-    runs-on: polaris
+    runs-on: ${{ inputs.runner }}
 
     outputs:
       failed_tests: ${{ steps.test_summary.outputs.failed_tests }}

@@ -33,6 +33,14 @@ on:
         type: number
         default: 0
         description: 'Minimum coverage percentage to enforce (0 disables enforcement)'
+      runner:
+        required: false
+        type: string
+        default: ''
+        description: >-
+          Runner label for the test job. Empty = automatic: 'ci-light' (the six-runner
+          test pool: upsilon + polaris) when env_file_source is empty, else 'polaris'
+          (fetching the .env needs the antares ssh key, which only polaris has).
       allure_results_dir:
         required: false
         type: string
@@ -119,7 +127,7 @@ on:
 
 jobs:
   tests:
-    runs-on: polaris
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (inputs.env_file_source == '' && 'ci-light' || 'polaris') }}
 
     outputs:
       failed_tests: ${{ steps.test_summary.outputs.failed_tests }}

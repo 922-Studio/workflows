@@ -12,7 +12,16 @@ jobs:
       - uses: actions/github-script@v8
         with:
           script: |
-            const branch = context.ref_name;
+            // `context.ref_name` does not exist on the github-script context (only `ref`
+            // is exposed), so the old value was undefined and the branch filter below was
+            // silently dropped: a run on dev cancelled in-flight runs on every branch,
+            // including a prod deploy. Take the ref from the runner environment instead,
+            // and refuse to continue without it rather than fall back to "all branches".
+            const branch = process.env.GITHUB_REF_NAME;
+            if (!branch) {
+              core.setFailed('GITHUB_REF_NAME is empty; refusing to cancel runs without a branch scope');
+              return;
+            }
 
             // Resolve the calling workflow's ID via the API (workflow_ref is unreliable in workflow_call)
             const currentRun = await github.rest.actions.getWorkflowRun({
@@ -35,6 +44,7 @@ jobs:
 
             const toCancel = runs.filter(run =>
               (run.status === 'in_progress' || run.status === 'queued') &&
+              run.head_branch === branch &&
               run.id !== context.runId
             );
 

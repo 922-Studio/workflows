@@ -31,8 +31,8 @@ on:
       runs_on:
         required: false
         type: string
-        default: 'ubuntu-latest'
-        description: 'Runner label'
+        default: 'polaris'
+        description: 'Runner label (self-hosted only; GitHub-hosted labels are not allowed)'
 
 jobs:
   lint:

@@ -28,7 +28,7 @@ on:
       image:
         required: false
         type: string
-        description: "Registry image to pull (e.g. registry.922-studio.com/drafter:dev). When provided, skips build and does docker compose pull + up."
+        description: "Registry image to pull (e.g. registry.922-studio.com/homeapi:dev). When provided, skips build and does docker compose pull + up."
       deploy_target:
         required: false
         type: string

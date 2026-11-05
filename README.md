@@ -38,7 +38,7 @@ Manages Docker-based PR preview environments on a self-hosted runner. Spins up a
 **Documentation**: [docs/pr-demo.md](docs/pr-demo.md)
 
 ### 8. Frontend Tests
-Runs a Node.js frontend test suite (Vitest) on a self-hosted runner with local disk caching for `node_modules`, optional build verification, Allure result uploads, and optional Prometheus Pushgateway coverage reporting. Supports npm and pnpm (via corepack), configurable working directories, and failure notifications via email or Discord.
+Runs a Node.js frontend test suite (Vitest) on a self-hosted runner with local disk caching for `node_modules`, optional build verification, Allure result uploads, and optional Prometheus Pushgateway coverage reporting. Input `runner` (default `polaris`) can be set to `ci-light` — the test pool of the upsilon + polaris runners — for suites that fit in 2 GiB and need no `env_file_source`. Supports npm and pnpm (via corepack), configurable working directories, and failure notifications via email or Discord.
 
 ### 9. Cancel Previous Runs
 Cancels any in-progress or queued runs of the same workflow on the same branch when a new run starts, preventing redundant CI work on rapid pushes.
@@ -47,7 +47,7 @@ Cancels any in-progress or queued runs of the same workflow on the same branch w
 Runs ruff check and ruff format on Python projects on a self-hosted runner. Supports configurable working directories and Python versions.
 
 ### 11. Python Tests
-Runs a Python test suite (pytest) on a self-hosted runner with Allure result uploads, optional coverage reporting via Prometheus Pushgateway, and failure notifications via email or Discord.
+Runs a Python test suite (pytest) on a self-hosted runner (input `runner`; empty = `ci-light` when `env_file_source` is empty, else `polaris`, since fetching the .env needs the polaris-only antares ssh key) with Allure result uploads, optional coverage reporting via Prometheus Pushgateway, and failure notifications via email or Discord.
 
 ### 12. Frontend E2E Tests
 Runs end-to-end tests (Playwright) for frontend projects on a self-hosted runner. Triggered via `workflow_dispatch` so E2E runs are decoupled from the main deployment pipeline.
