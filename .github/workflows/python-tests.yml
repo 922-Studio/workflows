@@ -39,8 +39,8 @@ on:
         default: ''
         description: >-
           Runner label for the test job. Empty = automatic: 'ci-light' (the six-runner
-          test pool: upsilon + polaris) when env_file_source is empty, else 'polaris'
-          (fetching the .env needs the antares ssh key, which only polaris has).
+          test pool: upsilon + polaris) when env_file_source is empty, else 'ci-full'
+          (fetching the .env needs the antares ssh key, which only ci-full runners have).
       allure_results_dir:
         required: false
         type: string
@@ -127,7 +127,7 @@ on:
 
 jobs:
   tests:
-    runs-on: ${{ inputs.runner != '' && inputs.runner || (inputs.env_file_source == '' && 'ci-light' || 'polaris') }}
+    runs-on: ${{ inputs.runner != '' && inputs.runner || (inputs.env_file_source == '' && 'ci-light' || 'ci-full') }}
 
     outputs:
       failed_tests: ${{ steps.test_summary.outputs.failed_tests }}

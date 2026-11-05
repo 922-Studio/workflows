@@ -61,7 +61,7 @@ on:
 
 jobs:
   generate-mcp:
-    runs-on: polaris
+    runs-on: ci-full
     steps:
       - name: Checkout workflows repo (for support scripts)
         uses: actions/checkout@v4

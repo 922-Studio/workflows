@@ -5,7 +5,7 @@ on:
 
 jobs:
   cancel:
-    runs-on: polaris
+    runs-on: ci-full
     permissions:
       actions: write
     steps:

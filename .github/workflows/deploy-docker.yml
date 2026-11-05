@@ -61,7 +61,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: polaris
+    runs-on: ci-full
     steps:
       - name: Log deployment start
         run: |

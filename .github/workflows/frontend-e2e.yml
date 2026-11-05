@@ -61,8 +61,8 @@ on:
       runner:
         required: false
         type: string
-        default: '["polaris"]'
-        description: 'JSON array of runner labels (e.g. "[\"polaris\",\"e2e\"]" to target the dedicated E2E runner)'
+        default: '["ci-full"]'
+        description: 'JSON array of runner labels (e.g. "[\"ci-full\",\"e2e\"]" to target the dedicated E2E runner)'
     secrets:
       ALLURE_TOKEN:
         required: false
