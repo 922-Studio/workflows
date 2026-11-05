@@ -56,11 +56,11 @@ on:
       runner:
         required: false
         type: string
-        default: 'polaris'
+        default: 'ci-full'
         description: >-
           Runner label for the test job. 'ci-light' (upsilon + polaris pool) only for
           suites that fit in 2 GiB RAM and need no env_file_source (antares ssh key is
-          polaris-only); large vitest suites (HomeUI) stay on 'polaris'.
+          polaris-only); large vitest suites (HomeUI) stay on 'ci-full'.
       allure_results_dir:
         required: false
         type: string

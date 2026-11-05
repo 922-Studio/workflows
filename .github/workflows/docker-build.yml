@@ -65,7 +65,7 @@ on:
 
 jobs:
   build:
-    runs-on: polaris
+    runs-on: ci-full
     outputs:
       image: ${{ steps.set_outputs.outputs.image }}
       digest: ${{ steps.push_image.outputs.digest }}

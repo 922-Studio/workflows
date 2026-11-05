@@ -20,7 +20,7 @@ on:
 
 jobs:
   version:
-    runs-on: polaris
+    runs-on: ci-full
     permissions:
       contents: write
     outputs:

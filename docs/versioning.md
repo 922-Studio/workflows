@@ -14,7 +14,7 @@ This document provides a detailed explanation of the AI-Powered Versioning workf
 
 ### Runner
 
-*   The job runs on the self-hosted `polaris` runners. GitHub-hosted labels (`ubuntu-*`, `macos-*`, `windows-*`) are not used anywhere in 922-Studio (OPS-199).
+*   The job runs on the self-hosted `ci-full` runners (the polaris runners). GitHub-hosted labels (`ubuntu-*`, `macos-*`, `windows-*`) are not used anywhere in 922-Studio (OPS-199).
 
 </details>
 
@@ -35,7 +35,7 @@ This document provides a detailed explanation of the AI-Powered Versioning workf
 
       build-and-push-docker:
         needs: version
-        runs-on: polaris
+        runs-on: ci-full
         steps:
           - name: Build and push Docker image
             uses: docker/build-push-action@v5
