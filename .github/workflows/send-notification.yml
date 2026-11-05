@@ -84,7 +84,7 @@ on:
 
 jobs:
   notify:
-    runs-on: polaris
+    runs-on: ci-full
     steps:
       - name: Checkout Workflow Scripts
         uses: actions/checkout@v5
