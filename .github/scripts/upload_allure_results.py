@@ -2,7 +2,6 @@
 import json
 import os
 import socket
-import sys
 import uuid
 from pathlib import Path
 from typing import List

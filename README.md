@@ -66,6 +66,13 @@ Optionally, set `transfer_target` to stream the built image straight into a targ
 ### 14. Create Issue
 Creates a GitHub issue when a CI workflow fails, capturing the workflow run URL, branch, and commit SHA for traceability.
 
+## PR CI
+
+Every pull request runs `.github/workflows/pr-ci.yml` on the self-hosted `ci-light` lane. It checks that no workflow
+uses a GitHub-hosted runner label, then runs yamllint (`.yamllint`), actionlint (`.github/actionlint.yaml` declares the
+self-hosted labels `ci-light`, `ci-full`, `deploy`), ruff and pytest on `.github/scripts` and `.github/tests`.
+Tools are pinned and installed into a throwaway venv. A green run of this check is the merge gate.
+
 ## Usage
 
 To use this workflow in your own repository, create a new workflow file (e.g., `.github/workflows/release.yml`) with the following content:

@@ -2,7 +2,6 @@
 
 import sys
 import os
-import pytest
 
 # Add scripts directory to path so we can import determine_version
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
