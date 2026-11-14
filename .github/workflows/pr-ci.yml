@@ -1,0 +1,54 @@
+name: PR CI
+
+# Gate for PRs in this repo: lint the workflow files and test the helper scripts.
+# Self-hosted lane only (ci-light); a GitHub-hosted label would never start.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pr-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pr-ci:
+    name: Lint workflows and test scripts
+    runs-on: [self-hosted, ci-light]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install linters into a venv
+        run: |
+          python3 -m venv .ci-venv
+          .ci-venv/bin/pip install --quiet \
+            yamllint==1.35.1 actionlint-py==1.7.7.23 ruff==0.8.6 pytest==8.3.4
+
+      - name: No GitHub-hosted runner labels
+        run: |
+          if grep -rnE 'runs-on:.*(ubuntu|macos|windows)-' .github/workflows; then
+            echo "::error::GitHub-hosted runner label found; use self-hosted lanes (ci-light, ci-full, deploy)"
+            exit 1
+          fi
+
+      - name: yamllint
+        run: .ci-venv/bin/yamllint -c .yamllint .github/workflows
+
+      - name: actionlint
+        run: .ci-venv/bin/actionlint
+
+      - name: ruff
+        run: .ci-venv/bin/ruff check .github/scripts .github/tests
+
+      - name: pytest
+        run: .ci-venv/bin/pytest -q .github/tests -p no:cacheprovider

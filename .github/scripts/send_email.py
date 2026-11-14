@@ -10,7 +10,6 @@ import json
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from pathlib import Path
 
 
 def get_default_template():
@@ -232,7 +231,7 @@ def main():
     
     # Print summary
     print("\n" + "=" * 50)
-    print(f"📊 Email Summary:")
+    print("📊 Email Summary:")
     print(f"   ✅ Successful: {success_count}")
     print(f"   ❌ Failed: {failure_count}")
     if failed_recipients:
@@ -244,7 +243,7 @@ def main():
         print(f"\n❌ Workflow failed: {failure_count} email(s) could not be sent")
         sys.exit(1)
     else:
-        print(f"\n✅ All emails sent successfully!")
+        print("\n✅ All emails sent successfully!")
         sys.exit(0)
 
 
